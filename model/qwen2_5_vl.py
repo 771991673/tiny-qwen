@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from typing import Optional
 from dataclasses import dataclass
 from .vision import Qwen2VLVisionEncoder, VisionConfig
+from .base import PretrainedModelMixin
 
 
 @dataclass
@@ -175,7 +176,7 @@ class Qwen2Model(nn.Module):
         return x
 
 
-class Qwen2VL(nn.Module):
+class Qwen2VL(nn.Module, PretrainedModelMixin):
     def __init__(self, config: Qwen2Config):
         super().__init__()
         self.config = config
@@ -303,7 +304,31 @@ class Qwen2VL(nn.Module):
         return Qwen2Config
 
     @classmethod
-    def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
-        from .util import load_pretrained_model
+    def convert_hf_config(cls, hf_config: dict) -> dict:
+        """Convert HF config and handle vision config for vision models."""
+        # Convert LLM config
+        converted_config = cls._convert_llm_config(hf_config)
+        
+        # Handle vision config if present
+        if "vision_config" in hf_config:
+            converted_config["vision_config"] = VisionConfig.from_hf_config(hf_config)
+        
+        return converted_config
 
-        return load_pretrained_model(cls, repo_id, device_map=device_map)
+    @classmethod
+    def get_loading_strategy(cls) -> dict:
+        """Vision models need special loading strategy."""
+        return {
+            "use_empty_weights": False,  # Vision models have issues with empty weights
+            "dtype": torch.bfloat16,
+            "no_split_module_classes": [
+                "Block",
+                "Qwen2VLVisionBlock",
+                "Qwen2VLVisionEncoder",
+                "PatchEmbed",
+                "PatchMerger",
+                "VisionMlp",
+                "VisionAttention",
+                "VisionRotaryEmbedding",
+            ]
+        }

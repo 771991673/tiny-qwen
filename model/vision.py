@@ -24,6 +24,49 @@ class VisionConfig:
     intermediate_size: int = None  # For gated MLP
     hidden_act: str = "quick_gelu"  # Activation function
 
+    @classmethod
+    def from_hf_config(cls, hf_config: dict) -> "VisionConfig":
+        """Convert HuggingFace vision config to our format."""
+        vision_config = hf_config["vision_config"]
+
+        # Handle different naming conventions between Qwen2-VL and Qwen2.5-VL
+        if "embed_dim" in vision_config:
+            # Qwen2-VL format
+            vision_config_key_mapping = {
+                "depth": "n_layer",
+                "embed_dim": "n_embed", 
+                "num_heads": "n_heads",
+                "in_chans": "in_channels",
+                "hidden_size": "output_n_embed",
+                "spatial_patch_size": "spatial_patch_size",
+                "temporal_patch_size": "temporal_patch_size",
+                "spatial_merge_size": "spatial_merge_size",
+            }
+        else:
+            # Qwen2.5-VL format
+            vision_config_key_mapping = {
+                "depth": "n_layer",
+                "hidden_size": "n_embed",
+                "num_heads": "n_heads",
+                "out_hidden_size": "output_n_embed",
+                "in_chans": "in_channels",
+                "patch_size": "spatial_patch_size",
+                "temporal_patch_size": "temporal_patch_size",
+                "spatial_merge_size": "spatial_merge_size",
+                "intermediate_size": "intermediate_size",
+                "hidden_act": "hidden_act",
+            }
+
+        # Convert keys
+        converted_config = {}
+        for key, value in vision_config.items():
+            new_key = vision_config_key_mapping.get(key, key)
+            converted_config[new_key] = value
+
+        # Filter to only valid fields
+        valid_fields = {k: v for k, v in converted_config.items() if k in cls.__annotations__}
+        return cls(**valid_fields)
+
 
 class VisionRotaryEmbedding(nn.Module):
     def __init__(self, dim: int, theta: float = 10000.0) -> None:

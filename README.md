@@ -49,7 +49,7 @@ ASSISTANT: The image shows a vibrant sunflower field with a close-up of a sunflo
 
 ```python
 from PIL import Image
-from model.model import Qwen2VL
+from model.qwen2_5_vl import Qwen2VL
 from model.processor import Processor
 
 model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -81,7 +81,7 @@ print()
 **Running `Qwen3`:**
 
 ```python
-from model.model import Qwen3MoE
+from model.qwen3 import Qwen3MoE
 from model.processor import Processor
 
 model_name = "Qwen/Qwen3-4B-Instruct-2507"
@@ -89,8 +89,8 @@ model = Qwen3MoE.from_pretrained(repo_id=model_name)
 processor = Processor(repo_id=model_name)
 
 context = [
-    "<|im_start|>user\n<|vision_start|>",
-    "<|vision_end|>Explain reverse linked list<|im_end|>\n<|im_start|>assistant\n",
+    "<|im_start|>user\n",
+    "Explain reverse linked list<|im_end|>\n<|im_start|>assistant\n",
 ]
 inputs = processor(context, device="cuda")
 generator = model.generate(

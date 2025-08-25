@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from typing import Optional
 from dataclasses import dataclass
 
+from .base import PretrainedModelMixin
+
 
 @dataclass
 class Qwen3Config:
@@ -352,7 +354,7 @@ class Qwen3DenseModel(nn.Module):
         return x
 
 
-class Qwen3Dense(nn.Module):
+class Qwen3Dense(nn.Module, PretrainedModelMixin):
     """Qwen3 dense model - text-only version"""
 
     def __init__(self, config: Qwen3Config):
@@ -421,11 +423,6 @@ class Qwen3Dense(nn.Module):
     def get_config_class(cls):
         return Qwen3Config
 
-    @classmethod
-    def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
-        from .util import load_pretrained_model
-
-        return load_pretrained_model(cls, repo_id, device_map=device_map)
 
 
 class Qwen3MoEModel(nn.Module):
@@ -453,7 +450,7 @@ class Qwen3MoEModel(nn.Module):
         return x
 
 
-class Qwen3MoE(nn.Module):
+class Qwen3MoE(nn.Module, PretrainedModelMixin):
     """Qwen3 MoE model - text-only version with mixture of experts"""
 
     def __init__(self, config: Qwen3Config):
@@ -522,8 +519,12 @@ class Qwen3MoE(nn.Module):
     def get_config_class(cls):
         return Qwen3Config
 
-    @classmethod
-    def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
-        from .util import load_pretrained_model
 
-        return load_pretrained_model(cls, repo_id, device_map=device_map)
+    @classmethod
+    def get_loading_strategy(cls) -> dict:
+        """MoE models need special loading strategy."""
+        return {
+            "use_empty_weights": True,
+            "dtype": torch.bfloat16,
+            "no_split_module_classes": ["Block", "Qwen3MoEBlock"]
+        }
