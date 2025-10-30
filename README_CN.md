@@ -16,7 +16,9 @@
 
 ## 🦋 快速开始
 
-推荐使用 `uv` 创建虚拟环境：
+**首先，安装 PyTorch：** 使用 `nvidia-smi` 查看 CUDA 版本，然后从 [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) 安装对应版本。
+
+然后使用 `uv` 安装依赖：
 
 ```bash
 pip install uv && uv venv

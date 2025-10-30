@@ -16,7 +16,9 @@ Join my [Discord channel](https://discord.gg/sBNnqP9gaY) for more discussion!
 
 ## 🦋 Quick Start
 
-I recommend using `uv` and creating a virtual environment:
+**First, install PyTorch:** Check your CUDA version with `nvidia-smi` and install from [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/).
+
+Then install dependencies using `uv`:
 
 ```bash
 pip install uv && uv venv
