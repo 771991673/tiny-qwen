@@ -1,9 +1,22 @@
 import torch
-import numpy as np
+import requests
+from io import BytesIO
 from PIL import Image
-from typing import List, Union, Tuple, Optional
+import numpy as np
+from typing import List, Tuple, Optional
+from dataclasses import dataclass
 from tokenizers import Tokenizer
+
 from .vision import VisionConfig
+
+
+@dataclass
+class ModelInputs:
+    input_ids: torch.Tensor  # (B, T)
+    attention_mask: torch.Tensor  # (B, T)
+    # ^ tell model which tokens to attend to. good for ignoring padding tokens in a batch padded to the same length.
+    pixel_values: torch.Tensor  # (B, C, H, W)
+    image_grid_thw: torch.Tensor  # (B, T, 3, H, W)
 
 
 class Processor:
@@ -33,21 +46,12 @@ class Processor:
                 [0.26862954, 0.26130258, 0.27577711], dtype=np.float32
             )
 
-    def __call__(
-        self,
-        # inputs: List[Union[str, Image.Image]],
-        messages: List[dict],
-        device: Optional[Union[str, torch.device]] = None,
-    ) -> dict:
-        """
-        Process a list of text and/or image inputs.
-        If vision_config is None, images are not allowed.
-        """
+    # Turn openai harmony style messages into model input tensors.
+    def __call__(self, messages: List[dict]) -> ModelInputs:
+        messages_str = self._flatten_messages(messages)
+        input_ids = self.tokenizer.encode(messages_str).ids
+        attention_mask = torch.ones_like(input_ids)
 
-        inputs = self.apply_chat_template(messages)
-
-        # Data accumulators
-        input_ids = []
         pixels_list = []
         d_image_list = []
 
@@ -95,101 +99,68 @@ class Processor:
             pixels = None
             d_image = None
 
-        # Move to device (if given)
-        if device is not None:
-            input_ids = input_ids.to(device)
-            if pixels is not None:
-                pixels = pixels.to(device)
+        # # Move to device (if given)
+        # if device is not None:
+        #     input_ids = input_ids.to(device)
+        #     if pixels is not None:
+        #         pixels = pixels.to(device)
 
-        # Return a dictionary consistent with common usage (like a huggingface processor)
-        return {
-            "input_ids": input_ids,
-            "pixels": pixels,
-            "d_image": d_image,
-        }
+        attention_mask = torch.ones_like(input_ids)
 
-    def apply_chat_template(
-        self, messages: List[dict]
-    ) -> List[Union[str, Image.Image]]:
-        # Simple implementation since tokenizer doesn't have apply_chat_template
-        if (
-            isinstance(messages, list)
-            and len(messages) > 0
-            and isinstance(messages[0], dict)
-        ):
-            # Standard messages format - convert to our mixed format
-            result = []
-            for message in messages:
-                if message["role"] == "user":
-                    result.append(f"<|im_start|>user\n")
-                    content = message["content"]
-                    if isinstance(content, str):
-                        result.append(content)
-                    elif isinstance(content, list):
-                        for item in content:
-                            if item["type"] == "text":
-                                result.append(item.get("text") or item.get("content"))
-                            elif item["type"] == "image":
-                                from PIL import Image
-                                image_path = item.get("image") or item.get("content")
-                                image = Image.open(image_path)
-                                result.extend(
-                                    [
-                                        "<|vision_start|>",
-                                        image,
-                                        "<|vision_end|>",
-                                    ]
-                                )
-                    result.append("<|im_end|>\n")
-                elif message["role"] == "assistant":
-                    result.append(
-                        f"<|im_start|>assistant\n{message['content']}<|im_end|>\n"
-                    )
+        return ModelInputs(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixels,
+            image_grid_thw=d_image,
+        )
 
-            # Add generation prompt
-            result.append("<|im_start|>assistant\n")
-            return result
+    def _flatten_messages(self, messages: List[dict]) -> str:
+        flattened_messages = [self._flatten_message(message) for message in messages]
+        return "".join(flattened_messages)
+
+    def _flatten_message(self, message: dict) -> str:
+        role, content = message["role"], message["content"]
+        content_items = [self._flatten_content(item) for item in content]
+        if role == "system":
+            return f"<|im_start|>system\n{content_items}<|im_end|>\n"
+        elif role == "user":
+            return f"<|im_start|>user\n{content_items}<|im_end|>\n"
+        elif role == "assistant":
+            return f"<|im_start|>assistant\n{content_items}<|im_end|>\n"
         else:
-            # Already in our mixed format, return as-is
-            return messages
+            raise ValueError(f"Unsupported role: {role}")
 
-    def _smart_resize(
-        self, height: int, width: int, factor: int = 28
-    ) -> Tuple[int, int]:
-        if height < factor or width < factor:
-            raise ValueError(
-                f"height:{height} or width:{width} must be larger than factor:{factor}"
-            )
-        elif max(height, width) / min(height, width) > 200:
-            raise ValueError(
-                f"absolute aspect ratio must be smaller than 200, got {max(height, width) / min(height, width)}"
-            )
+    def _flatten_content(
+        self, content: List[str | dict[str, str | Image.Image]]
+    ) -> str:
+        if isinstance(content, str):
+            return content
+        elif content["type"] == "text":
+            return content["text"]
+        elif content["type"] == "image":
+            return "<|vision_start|><|image_pad|><|vision_end|>"
+        elif content["type"] == "tool_use":
+            tool_name, tool_id, tool_args = content["name"], content["args"]
+            return f"<|tool_use|>{tool_name}<|tool_use_id|>{tool_id}<|args|>{tool_args}<|tool_use_end|>"
+        elif content["type"] == "tool_result":
+            tool_id, result = content["tool"], content["result"]
+            return f"<|tool_result|>{tool_id}<|result|>{result}<|tool_result_end|>"
+        else:
+            raise ValueError(f"Unsupported content type: {content['type']}")
 
-        h_bar = round(height / factor) * factor
-        w_bar = round(width / factor) * factor
-
-        if h_bar * w_bar > self.MAX_PIXELS:
-            beta = np.sqrt((height * width) / self.MAX_PIXELS)
-            h_bar = int(np.floor(height / beta / factor) * factor)
-            w_bar = int(np.floor(width / beta / factor) * factor)
-        elif h_bar * w_bar < self.MIN_PIXELS:
-            beta = np.sqrt(self.MIN_PIXELS / (height * width))
-            h_bar = int(np.ceil(height * beta / factor) * factor)
-            w_bar = int(np.ceil(width * beta / factor) * factor)
-
-        return h_bar, w_bar
+    def _fetch_img_through_url(self, url: str) -> Image.Image:
+        response = requests.get(url)
+        response.raise_for_status()
+        return Image.open(BytesIO(response.content))
 
     def _process_image(self, image: Image.Image) -> Tuple[np.ndarray, int, int, int]:
-        """Same logic as your existing _process_image method, returning the flatten patches + (t, h, w)."""
-
-        # Example snippet:
         SPATIAL_PATCH_SIZE = self.vision_config.spatial_patch_size
         TEMPORAL_PATCH_SIZE = self.vision_config.temporal_patch_size
         SPATIAL_MERGE_SIZE = self.vision_config.spatial_merge_size
 
         image_np = np.array(image, dtype=np.float32)
         height, width = image_np.shape[:2]
-        resized_height, resized_width = self._smart_resize(
+        resized_height, resized_width = self._resize_image(
             height,
             width,
             factor=SPATIAL_PATCH_SIZE * SPATIAL_MERGE_SIZE,
@@ -238,6 +209,32 @@ class Processor:
         )
 
         return flatten_patches.astype(np.float32), grid_t, grid_h, grid_w
+
+    def _resize_image(
+        self, height: int, width: int, factor: int = 28
+    ) -> Tuple[int, int]:
+        if height < factor or width < factor:
+            raise ValueError(
+                f"height:{height} or width:{width} must be larger than factor:{factor}"
+            )
+        elif max(height, width) / min(height, width) > 200:
+            raise ValueError(
+                f"absolute aspect ratio must be smaller than 200, got {max(height, width) / min(height, width)}"
+            )
+
+        h_bar = round(height / factor) * factor
+        w_bar = round(width / factor) * factor
+
+        if h_bar * w_bar > self.MAX_PIXELS:
+            beta = np.sqrt((height * width) / self.MAX_PIXELS)
+            h_bar = int(np.floor(height / beta / factor) * factor)
+            w_bar = int(np.floor(width / beta / factor) * factor)
+        elif h_bar * w_bar < self.MIN_PIXELS:
+            beta = np.sqrt(self.MIN_PIXELS / (height * width))
+            h_bar = int(np.ceil(height * beta / factor) * factor)
+            w_bar = int(np.ceil(width * beta / factor) * factor)
+
+        return h_bar, w_bar
 
 
 if __name__ == "__main__":
