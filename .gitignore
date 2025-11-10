@@ -6,7 +6,7 @@ __pycache__
 *.ipynb_checkpoints
 playground.ipynb
 cache
-venv
+.venv/
 test.py
 textbook/
 .env

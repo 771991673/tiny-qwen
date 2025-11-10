@@ -1,3 +1,4 @@
+import json
 import torch
 import requests
 from io import BytesIO
@@ -19,12 +20,28 @@ class ModelInputs:
     image_grid_thw: torch.Tensor  # (B, T, 3, H, W)
 
 
-class Processor:
-    def __init__(self, repo_id: str, vision_config: Optional[VisionConfig] = None):
-        self.tokenizer = Tokenizer.from_pretrained(repo_id)
-        self.vision_config = vision_config
+USER_MESSAGE_TEMPLATE = "<|im_start|>user\n{content}<|im_end|>\n"
+ASSISTANT_MESSAGE_TEMPLATE = "<|im_start|>assistant\n{content}{tool_calls}<|im_end|>\n"
+TOOL_MESSAGE_TEMPLATE = (
+    "<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>\n"
+)
+SYSTEM_MESSAGE_TEMPLATE = "<|im_start|>system\n{content}<|im_end|>\n"
 
-        if self.vision_config is not None:
+IMAGE_PLACEHOLDER = "<|vision_start|><|image_pad|><|vision_end|>"
+
+TOOL_CALL_TEMPLATE = (
+    '<tool_call>\n{{"name": "{name}", "arguments": {arguments}}}\n</tool_call>'
+)
+TOOL_RESPONSE_TEMPLATE = (
+    "<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>\n"
+)
+
+
+class Processor:
+    def __init__(self, model_config):
+        self.tokenizer = Tokenizer.from_pretrained(model_config.repo_id)
+
+        if model_config.vision_config is not None:
             # Vision-specific setup
             image_pad_token = "<|image_pad|>"
             vision_start_token = "<|vision_start|>"
@@ -48,105 +65,129 @@ class Processor:
 
     # Turn openai harmony style messages into model input tensors.
     def __call__(self, messages: List[dict]) -> ModelInputs:
-        messages_str = self._flatten_messages(messages)
-        input_ids = self.tokenizer.encode(messages_str).ids
-        attention_mask = torch.ones_like(input_ids)
+        messages_str = self._render_messages(messages)
+        # input_ids = self.tokenizer.encode(messages_str).ids
+        # attention_mask = torch.ones_like(input_ids)
+        return messages_str
+        # pixels_list = []
+        # d_image_list = []
 
-        pixels_list = []
-        d_image_list = []
+        # # Identify if we have vision support
+        # has_vision = self.vision_config is not None
+        # if not has_vision:
+        #     # If we have no vision_config, do text-only
+        #     for item in inputs:
+        #         if isinstance(item, str):
+        #             input_ids.extend(self.tokenizer.encode(item).ids)
+        #         else:
+        #             raise ValueError(
+        #                 f"Images are not supported by a text-only model. Got {type(item)}"
+        #             )
+        # else:
+        #     # Vision + text model
+        #     merge_size = self.vision_config.spatial_merge_size
+        #     image_pad_token_id = self.image_pad_token_id
 
-        # Identify if we have vision support
-        has_vision = self.vision_config is not None
-        if not has_vision:
-            # If we have no vision_config, do text-only
-            for item in inputs:
-                if isinstance(item, str):
-                    input_ids.extend(self.tokenizer.encode(item).ids)
-                else:
-                    raise ValueError(
-                        f"Images are not supported by a text-only model. Got {type(item)}"
-                    )
+        #     for item in inputs:
+        #         if isinstance(item, str):
+        #             # Handle text
+        #             input_ids.extend(self.tokenizer.encode(item).ids)
+        #         elif isinstance(item, Image.Image):
+        #             # Handle image
+        #             patches, t, h, w = self._process_image(item)
+        #             pixels_list.append(patches)
+        #             d_image_list.append([t, h, w])
+
+        #             pad_token_count = (t * h * w) // (merge_size**2)
+        #             pad_tokens = [image_pad_token_id] * pad_token_count
+        #             input_ids.extend(pad_tokens)
+        #         else:
+        #             raise ValueError(f"Unsupported input type: {type(item)}")
+
+        # # Convert accumulated ids to tensor
+        # input_ids = torch.tensor([input_ids], dtype=torch.long)
+
+        # # Convert all images to tensor if there are any
+        # if pixels_list:
+        #     pixels_np = np.concatenate(pixels_list, axis=0)
+        #     pixels = torch.tensor(pixels_np, dtype=torch.float)
+        #     d_image = torch.tensor(d_image_list, dtype=torch.long)
+        # else:
+        #     pixels = None
+        #     d_image = None
+
+        # attention_mask = torch.ones_like(input_ids)
+
+        # return ModelInputs(
+        #     input_ids=input_ids,
+        #     attention_mask=attention_mask,
+        #     pixel_values=pixels,
+        #     image_grid_thw=d_image,
+        # )
+
+    def _render_messages(self, messages: List[dict]) -> str:
+        rendered = [self._render_message(message) for message in messages]
+        return "".join(rendered)
+
+    def _render_message(self, message: dict) -> str:
+        assert isinstance(message, dict), f"Message must be a dict, got {type(message)}"
+        assert "role" in message, f"Message must have a role, got {message}"
+
+        role = message["role"]
+        content = message.get("content", "")
+
+        tool_calls = message.get("tool_calls", [])
+        tool_calls = [self._render_tool_call(tool_call) for tool_call in tool_calls]
+        tool_call_str = "".join(tool_calls)
+
+        if isinstance(content, str):
+            content_str = content
+        elif isinstance(content, list):
+            content_str = "".join([self._render_content(item) for item in content])
         else:
-            # Vision + text model
-            merge_size = self.vision_config.spatial_merge_size
-            image_pad_token_id = self.image_pad_token_id
+            content_str = ""
 
-            for item in inputs:
-                if isinstance(item, str):
-                    # Handle text
-                    input_ids.extend(self.tokenizer.encode(item).ids)
-                elif isinstance(item, Image.Image):
-                    # Handle image
-                    patches, t, h, w = self._process_image(item)
-                    pixels_list.append(patches)
-                    d_image_list.append([t, h, w])
-
-                    pad_token_count = (t * h * w) // (merge_size**2)
-                    pad_tokens = [image_pad_token_id] * pad_token_count
-                    input_ids.extend(pad_tokens)
-                else:
-                    raise ValueError(f"Unsupported input type: {type(item)}")
-
-        # Convert accumulated ids to tensor
-        input_ids = torch.tensor([input_ids], dtype=torch.long)
-
-        # Convert all images to tensor if there are any
-        if pixels_list:
-            pixels_np = np.concatenate(pixels_list, axis=0)
-            pixels = torch.tensor(pixels_np, dtype=torch.float)
-            d_image = torch.tensor(d_image_list, dtype=torch.long)
-        else:
-            pixels = None
-            d_image = None
-
-        # # Move to device (if given)
-        # if device is not None:
-        #     input_ids = input_ids.to(device)
-        #     if pixels is not None:
-        #         pixels = pixels.to(device)
-
-        attention_mask = torch.ones_like(input_ids)
-
-        return ModelInputs(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            pixel_values=pixels,
-            image_grid_thw=d_image,
-        )
-
-    def _flatten_messages(self, messages: List[dict]) -> str:
-        flattened_messages = [self._flatten_message(message) for message in messages]
-        return "".join(flattened_messages)
-
-    def _flatten_message(self, message: dict) -> str:
-        role, content = message["role"], message["content"]
-        content_items = [self._flatten_content(item) for item in content]
         if role == "system":
-            return f"<|im_start|>system\n{content_items}<|im_end|>\n"
+            return SYSTEM_MESSAGE_TEMPLATE.format(content=content_str)
         elif role == "user":
-            return f"<|im_start|>user\n{content_items}<|im_end|>\n"
+            return USER_MESSAGE_TEMPLATE.format(content=content_str)
         elif role == "assistant":
-            return f"<|im_start|>assistant\n{content_items}<|im_end|>\n"
+            return ASSISTANT_MESSAGE_TEMPLATE.format(
+                content=content_str, tool_calls=tool_call_str
+            )
+        elif role == "tool":
+            return TOOL_RESPONSE_TEMPLATE.format(content=content_str)
         else:
             raise ValueError(f"Unsupported role: {role}")
 
-    def _flatten_content(
-        self, content: List[str | dict[str, str | Image.Image]]
-    ) -> str:
+    def _render_content(self, content: dict | str) -> str:
+        assert isinstance(content, dict) or isinstance(
+            content, str
+        ), f"Content must be a string or a dict, got {type(content)}"
+        assert (
+            isinstance(content, dict) and "type" in content
+        ), f"Content must be a dict with a type, got {content}"
+
         if isinstance(content, str):
             return content
-        elif content["type"] == "text":
+        if content["type"] == "text":
             return content["text"]
         elif content["type"] == "image":
-            return "<|vision_start|><|image_pad|><|vision_end|>"
-        elif content["type"] == "tool_use":
-            tool_name, tool_id, tool_args = content["name"], content["args"]
-            return f"<|tool_use|>{tool_name}<|tool_use_id|>{tool_id}<|args|>{tool_args}<|tool_use_end|>"
-        elif content["type"] == "tool_result":
-            tool_id, result = content["tool"], content["result"]
-            return f"<|tool_result|>{tool_id}<|result|>{result}<|tool_result_end|>"
+            return IMAGE_PLACEHOLDER
         else:
             raise ValueError(f"Unsupported content type: {content['type']}")
+
+    def _render_tool_call(self, tool_call: dict) -> str:
+        assert isinstance(
+            tool_call, dict
+        ), f"Tool call must be a dict, got {type(tool_call)}"
+        assert (
+            "name" in tool_call and "arguments" in tool_call
+        ), f"Tool call must have a name and arguments, got {tool_call}"
+        return TOOL_CALL_TEMPLATE.format(
+            name=tool_call["name"],
+            arguments=tool_call["arguments"],
+        )
 
     def _fetch_img_through_url(self, url: str) -> Image.Image:
         response = requests.get(url)
@@ -235,96 +276,3 @@ class Processor:
             w_bar = int(np.ceil(width * beta / factor) * factor)
 
         return h_bar, w_bar
-
-
-if __name__ == "__main__":
-    from transformers import AutoProcessor
-
-    model_name = "Qwen/Qwen2-VL-2B-Instruct"
-    hf_processor = AutoProcessor.from_pretrained(model_name)
-
-    vision_config = VisionConfig(
-        n_embed=1280,
-        n_layer=32,
-        n_heads=16,
-        output_n_embed=1280,
-        in_channels=3,
-        spatial_merge_size=2,
-        spatial_patch_size=14,
-        temporal_patch_size=2,
-    )
-    our_processor = Processor(repo_id=model_name, vision_config=vision_config)
-
-    image_1 = Image.open("test-images/test-image.webp")
-    image_2 = Image.open("test-images/test-image.jpeg")
-
-    text_for_hf = (
-        "<|im_start|>user\n"
-        "<|vision_start|><|image_pad|><|vision_end|>What's in image 1?\n"
-        "<|vision_start|><|image_pad|><|vision_end|>Now what's in image 2?<|im_end|>\n"
-        "<|im_start|>assistant\n"
-    )
-
-    text_for_ours = [
-        "<|im_start|>user\n<|vision_start|>",
-        image_1,
-        "<|vision_end|>What's in image 1?\n<|vision_start|>",
-        image_2,
-        "<|vision_end|>Now what's in image 2?<|im_end|>\n<|im_start|>assistant\n",
-    ]
-
-    # Process with HF processor
-    hf_processed = hf_processor(
-        text=[text_for_hf],
-        images=[image_1, image_2],
-        return_tensors="pt",
-    )
-    hf_input_ids = hf_processed["input_ids"]
-    hf_pixel_values = hf_processed["pixel_values"]
-    hf_grid_thw = hf_processed["image_grid_thw"]
-
-    # Process with our processor
-    our_processed = our_processor(text_for_ours)
-    our_input_ids = our_processed["input_ids"]
-    our_pixel_values = our_processed["pixel_values"]
-    our_grid_thw = our_processed["grid_thw"]
-
-    # Print shapes
-    print("\nOutput Shapes:")
-    print("-" * 50)
-    print("pixel_values:")
-    print("  HF:", hf_pixel_values.shape)
-    print("  Ours:", our_pixel_values.shape)
-
-    print("\ninput_ids:")
-    print("  HF:", hf_input_ids.shape)
-    print("  Ours:", our_input_ids.shape)
-
-    print("\ngrid_thw:")
-    print("  HF:", hf_grid_thw.shape)
-    print("  Ours:", our_grid_thw.shape)
-
-    # Print differences
-    print("\nDifferences:")
-    print("-" * 50)
-
-    # pixel_values
-    diff_pixel_values = torch.abs(hf_pixel_values - our_pixel_values.cpu()).sum().item()
-    numel_pixel_values = hf_pixel_values.numel()
-    print("pixel_values:")
-    print("  Total difference:", diff_pixel_values)
-    print("  Average difference:", diff_pixel_values / numel_pixel_values)
-
-    # input_ids
-    diff_input_ids = torch.abs(hf_input_ids - our_input_ids.cpu()).sum().item()
-    numel_input_ids = hf_input_ids.numel()
-    print("\ninput_ids:")
-    print("  Total difference:", diff_input_ids)
-    print("  Average difference:", diff_input_ids / numel_input_ids)
-
-    # grid_thw
-    diff_grid = torch.abs(hf_grid_thw - our_grid_thw.cpu()).sum().item()
-    numel_grid = hf_grid_thw.numel()
-    print("\ngrid_thw:")
-    print("  Total difference:", diff_grid)
-    print("  Average difference:", diff_grid / numel_grid)
