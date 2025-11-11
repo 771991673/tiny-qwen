@@ -1,8 +1,7 @@
+import json
 import torch
 import requests
 import numpy as np
-import json
-from pathlib import Path
 from PIL import Image
 from io import BytesIO
 from typing import List, Tuple
@@ -31,10 +30,7 @@ TEMPORAL_PATCH_SIZE = 2
 
 class Processor:
     def __init__(
-        self,
-        tokenizer: Tokenizer,
-        min_pixels: int = 65536,
-        max_pixels: int = 16777216,
+        self, tokenizer: Tokenizer, min_pixels: int = 65536, max_pixels: int = 16777216
     ):
         self.tokenizer = tokenizer
         self.min_pixels = min_pixels
@@ -124,18 +120,10 @@ class Processor:
         if content["type"] == "text":
             return content["text"]
         elif content["type"] == "image":
-            # Fetch image from URL or local path
-            if "url" not in content:
-                raise ValueError(
-                    f"Image content must have 'url' field with URL or local path, got {content}"
-                )
             image = self._fetch_img_through_url(content["url"])
-
             patches, grid_t, grid_h, grid_w = self._process_image(image)
-
             pixels_list.append(patches)
             d_image_list.append([grid_t, grid_h, grid_w])
-
             pad_count = (grid_t * grid_h * grid_w) // (SPATIAL_MERGE_SIZE**2)
             pad_tokens = IMAGE_PAD_TOKEN * pad_count
             return IMAGE_TEMPLATE.format(content=pad_tokens)
@@ -226,7 +214,6 @@ class Processor:
             h_bar = max(factor, int(np.floor(height / beta / factor) * factor))
             w_bar = max(factor, int(np.floor(width / beta / factor) * factor))
         elif h_bar * w_bar < self.min_pixels:
-            # Check 2D area only (without temporal dimension) for min_pixels
             beta = np.sqrt(self.min_pixels / (height * width))
             h_bar = int(np.ceil(height * beta / factor) * factor)
             w_bar = int(np.ceil(width * beta / factor) * factor)
