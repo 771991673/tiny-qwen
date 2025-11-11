@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 from dataclasses import dataclass
+from .utils import rename_dict_keys, load_pretrained_model
+from .vision import VisionEncoder, VisionConfig
 
 
 @dataclass
@@ -13,20 +15,28 @@ class ModelConfig:
     n_heads: int
     n_kv_heads: int
     n_layer: int
-    n_mlp: int
+    n_dense_mlp: int
     rope_theta: float
     rms_norm_eps: float
-    vocab_size: int
+    n_vocab: int
     tie_word_embeddings: bool
-    head_dim: Optional[int] = None  # Explicit head dimension
+    max_position_embeddings: int
+    max_window_layers: int
+    eos_token_id: int
+    head_dim: Optional[int] = None
+    n_moe_mlp: Optional[int] = None
 
     # MoE parameters
-    num_experts: Optional[int] = None
-    num_experts_per_tok: Optional[int] = None
-    moe_intermediate_size: Optional[int] = None
+    n_experts: Optional[int] = None
+    n_experts_per_tok: Optional[int] = None
+
+    @classmethod
+    def from_pretrained(cls, config: dict):
+        config = rename_dict_keys(config, HF_TO_LM_CONFIG)
+        return cls(**config)
 
 
-class Qwen3RotaryEmbedding(nn.Module):
+class RotaryEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
         # Use explicit head_dim if provided, otherwise calculate
@@ -37,22 +47,65 @@ class Qwen3RotaryEmbedding(nn.Module):
         )
         t = config.rope_theta
         r = torch.arange(0, d, 2)
-        self.inv_freq = 1.0 / (t ** (r / d)).float()
+        inv_freq = 1.0 / (t ** (r / d)).float()
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        # M-RoPE section for multimodal (temporal, height, width)
+        # Default from Qwen3-VL: [24, 20, 20] for 64-dim head
+        self.mrope_section = [16, 24, 24]  # For typical 64-dim head
 
     def forward(self, x, position_ids):
-        # Check the dimensionality of position_ids to decide shape
-        # shape is typically B x T (2D) for text, or B x 3 x T (3D) for multimodal
-        if position_ids.dim() == 3:
-            inv_freq = self.inv_freq.unsqueeze(0).unsqueeze(0).to(x.device)
-        else:
-            inv_freq = self.inv_freq.to(x.device)
+        """
+        Args:
+            x: hidden states
+            position_ids: 2D [batch, seq] for text-only, or 3D [3, batch, seq] for multimodal
 
-        position_ids = position_ids.unsqueeze(-1)
-        freqs = position_ids * inv_freq
-        emb = torch.cat([freqs, freqs], dim=-1)
-        cos = emb.cos().to(x.dtype)
-        sin = emb.sin().to(x.dtype)
-        return cos, sin
+        Returns:
+            Tuple of (cos, sin) tensors
+        """
+        # Handle 2D (text-only) vs 3D (multimodal) position_ids
+        if position_ids.ndim == 2:
+            # Text-only mode: standard RoPE
+            inv_freq = self.inv_freq.to(x.device)
+            position_ids = position_ids.unsqueeze(-1).float()
+            freqs = position_ids * inv_freq
+            emb = torch.cat([freqs, freqs], dim=-1)
+            cos = emb.cos().to(x.dtype)
+            sin = emb.sin().to(x.dtype)
+            return cos, sin
+        else:
+            # Multimodal mode: M-RoPE with 3D position_ids [3, batch, seq]
+            inv_freq_expanded = self.inv_freq[None, None, :, None].float().expand(3, position_ids.shape[1], -1, 1)
+            position_ids_expanded = position_ids[:, :, None, :].float()  # shape (3, bs, 1, positions)
+
+            device_type = x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
+            with torch.autocast(device_type=device_type, enabled=False):  # Force float32
+                freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+                freqs = self._apply_interleaved_mrope(freqs, self.mrope_section)
+                emb = torch.cat((freqs, freqs), dim=-1)
+                cos = emb.cos()
+                sin = emb.sin()
+
+            return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+    def _apply_interleaved_mrope(self, freqs, mrope_section):
+        """Apply interleaved MRoPE to 3D rotary embeddings.
+        Reorganizes frequency layout from chunked [TTT...HHH...WWW] to
+        interleaved [THTHWHTHW...TT], preserving frequency continuity.
+
+        Args:
+            freqs: (3, bs, seq_len, head_dim // 2)
+            mrope_section: list of 3 ints [t_section, h_section, w_section]
+
+        Returns:
+            freqs_t: (bs, seq_len, head_dim // 2)
+        """
+        freqs_t = freqs[0]  # Start with temporal frequencies
+        for dim, offset in enumerate((1, 2), start=1):  # H, W dimensions
+            length = mrope_section[dim] * 3
+            idx = slice(offset, length, 3)
+            freqs_t[..., idx] = freqs[dim, ..., idx]
+        return freqs_t
 
 
 class Qwen3DenseAttention(nn.Module):
@@ -334,7 +387,7 @@ class Qwen3DenseModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.embed_tokens = nn.Embedding(config.vocab_size, config.n_embed)
-        self.rotary_emb = Qwen3RotaryEmbedding(config)
+        self.rotary_emb = RotaryEmbedding(config)
 
         # Use Qwen3Block with proper attention
         self.layers = nn.ModuleList(
@@ -345,18 +398,39 @@ class Qwen3DenseModel(nn.Module):
         # Store config for convenience
         self.config = config
 
-    def forward(self, x, position_ids):
+    def forward(self, x, position_ids, visual_pos_masks=None, deepstack_visual_embeds=None):
+        """
+        Args:
+            x: input embeddings
+            position_ids: 2D [batch, seq] or 3D [3, batch, seq] for multimodal
+            visual_pos_masks: optional tensor marking visual token positions
+            deepstack_visual_embeds: optional list of visual features to inject
+        """
         cos, sin = self.rotary_emb(x, position_ids)
-        for layer in self.layers:
+        for layer_idx, layer in enumerate(self.layers):
             x = layer(x, cos, sin)
+
+            # Inject deepstack visual features if provided
+            if deepstack_visual_embeds is not None and layer_idx < len(deepstack_visual_embeds):
+                if deepstack_visual_embeds[layer_idx] is not None:
+                    x = self._deepstack_process(x, visual_pos_masks, deepstack_visual_embeds[layer_idx])
+
         x = self.norm(x)
         return x
+
+    def _deepstack_process(self, hidden_states, visual_pos_masks, visual_embeds):
+        """Inject visual features into hidden states at visual token positions"""
+        visual_pos_masks = visual_pos_masks.to(hidden_states.device)
+        visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
+        hidden_states = hidden_states.clone()
+        hidden_states[visual_pos_masks] = visual_embeds
+        return hidden_states
 
 
 class Qwen3Dense(nn.Module):
     """Qwen3 dense model - text-only version"""
 
-    def __init__(self, config: Qwen3Config):
+    def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
         self.model = Qwen3DenseModel(config)
@@ -420,12 +494,10 @@ class Qwen3Dense(nn.Module):
 
     @classmethod
     def get_config_class(cls):
-        return Qwen3Config
+        return ModelConfig
 
     @classmethod
     def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
-        from .util import load_pretrained_model
-
         return load_pretrained_model(cls, repo_id, device_map=device_map)
 
 
@@ -435,7 +507,7 @@ class Qwen3MoEModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.embed_tokens = nn.Embedding(config.vocab_size, config.n_embed)
-        self.rotary_emb = Qwen3RotaryEmbedding(config)
+        self.rotary_emb = RotaryEmbedding(config)
 
         # Use Qwen3MoeBlock with proper attention and MoE
         self.layers = nn.ModuleList(
@@ -446,18 +518,39 @@ class Qwen3MoEModel(nn.Module):
         # Store config for convenience
         self.config = config
 
-    def forward(self, x, position_ids):
+    def forward(self, x, position_ids, visual_pos_masks=None, deepstack_visual_embeds=None):
+        """
+        Args:
+            x: input embeddings
+            position_ids: 2D [batch, seq] or 3D [3, batch, seq] for multimodal
+            visual_pos_masks: optional tensor marking visual token positions
+            deepstack_visual_embeds: optional list of visual features to inject
+        """
         cos, sin = self.rotary_emb(x, position_ids)
-        for layer in self.layers:
+        for layer_idx, layer in enumerate(self.layers):
             x = layer(x, cos, sin)
+
+            # Inject deepstack visual features if provided
+            if deepstack_visual_embeds is not None and layer_idx < len(deepstack_visual_embeds):
+                if deepstack_visual_embeds[layer_idx] is not None:
+                    x = self._deepstack_process(x, visual_pos_masks, deepstack_visual_embeds[layer_idx])
+
         x = self.norm(x)
         return x
+
+    def _deepstack_process(self, hidden_states, visual_pos_masks, visual_embeds):
+        """Inject visual features into hidden states at visual token positions"""
+        visual_pos_masks = visual_pos_masks.to(hidden_states.device)
+        visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
+        hidden_states = hidden_states.clone()
+        hidden_states[visual_pos_masks] = visual_embeds
+        return hidden_states
 
 
 class Qwen3MoE(nn.Module):
     """Qwen3 MoE model - text-only version with mixture of experts"""
 
-    def __init__(self, config: Qwen3Config):
+    def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
         self.model = Qwen3MoEModel(config)
@@ -521,35 +614,233 @@ class Qwen3MoE(nn.Module):
 
     @classmethod
     def get_config_class(cls):
-        return Qwen3Config
+        return ModelConfig
 
     @classmethod
     def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
-        from .util import load_pretrained_model
-
         return load_pretrained_model(cls, repo_id, device_map=device_map)
 
 
-# Configuration key mapping for loading HuggingFace pretrained language models
+# ============================================================================
+# Multimodal VL Models
+# ============================================================================
+
+
+@dataclass
+class VLConfig:
+    """Configuration for multimodal VL models"""
+    text_config: ModelConfig
+    vision_config: VisionConfig
+    repo_id: str = None
+
+    @classmethod
+    def from_pretrained(cls, config: dict):
+        text_cfg = ModelConfig.from_pretrained(config.get("text_config", config))
+        vision_cfg = VisionConfig.from_pretrained(config.get("vision_config", {}))
+        return cls(text_config=text_cfg, vision_config=vision_cfg, repo_id=config.get("repo_id"))
+
+
+class Qwen3VLDense(nn.Module):
+    """Qwen3-VL Dense multimodal model"""
+
+    def __init__(self, config: VLConfig):
+        super().__init__()
+        self.config = config
+        self.vision_encoder = VisionEncoder(config.vision_config)
+        self.language_model = Qwen3DenseModel(config.text_config)
+
+        self.lm_head = None
+        if not config.text_config.tie_word_embeddings:
+            self.lm_head = nn.Linear(config.text_config.n_embed, config.text_config.n_vocab, bias=False)
+
+    def get_rope_index(
+        self,
+        input_ids: torch.Tensor,
+        image_grid_thw: Optional[torch.Tensor] = None,
+    ):
+        """
+        Generate M-RoPE position indices based on image grids.
+
+        Returns:
+            position_ids: 3D tensor [3, batch, seq] with temporal/height/width positions
+            mrope_position_deltas: Position deltas for tracking offset
+        """
+        # Build position IDs - simple sequential for batch size 1
+        seq_len = input_ids.shape[1]
+        position_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).unsqueeze(0).expand(3, input_ids.shape[0], -1)
+
+        mrope_position_deltas = position_ids[0].max(dim=-1, keepdim=True)[0] + 1 - input_ids.shape[1]
+
+        return position_ids, mrope_position_deltas
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: Optional[torch.Tensor] = None,
+        image_grid_thw: Optional[torch.Tensor] = None,
+    ):
+        """
+        Forward pass for multimodal input.
+
+        Args:
+            input_ids: Text token IDs [batch, seq]
+            pixel_values: Image pixels (optional)
+            image_grid_thw: Image grid dimensions [num_images, 3] (temporal, height, width)
+
+        Returns:
+            logits: Language model logits
+        """
+        # Process vision inputs
+        visual_features = None
+        deepstack_visual_embeds = None
+        visual_pos_masks = None
+
+        if pixel_values is not None and image_grid_thw is not None:
+            # Run vision encoder
+            visual_features, deepstack_features_list = self.vision_encoder(pixel_values, image_grid_thw)
+
+            # Prepare deepstack embeddings (pad to match number of layers)
+            num_layers = len(self.language_model.layers)
+            deepstack_visual_embeds = [None] * num_layers
+            if self.vision_encoder.deepstack_visual_indexes:
+                for idx, layer_idx in enumerate(self.vision_encoder.deepstack_visual_indexes):
+                    if layer_idx < num_layers:
+                        deepstack_visual_embeds[layer_idx] = deepstack_features_list[idx]
+
+            # Create visual position mask (marks where visual tokens are in the sequence)
+            # This is a simplified version - in practice you'd track actual positions
+            visual_pos_masks = torch.zeros(input_ids.shape[0], input_ids.shape[1], dtype=torch.bool, device=input_ids.device)
+
+        # Embed text tokens
+        inputs_embeds = self.language_model.embed_tokens(input_ids)
+
+        # Merge visual features into text embeddings if present
+        # Note: This is simplified - real implementation needs proper position tracking
+        if visual_features is not None:
+            pass  # TODO: Implement visual feature merging based on special tokens
+
+        # Generate position IDs
+        position_ids, _ = self.get_rope_index(input_ids, image_grid_thw)
+
+        # Run language model
+        hidden_states = self.language_model(
+            inputs_embeds,
+            position_ids=position_ids,
+            visual_pos_masks=visual_pos_masks,
+            deepstack_visual_embeds=deepstack_visual_embeds,
+        )
+
+        # Generate logits
+        if self.lm_head is None:
+            logits = torch.matmul(hidden_states, self.language_model.embed_tokens.weight.T)
+        else:
+            logits = self.lm_head(hidden_states)
+
+        return logits
+
+    @classmethod
+    def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
+        return load_pretrained_model(cls, repo_id, device_map=device_map)
+
+
+class Qwen3VLMoE(nn.Module):
+    """Qwen3-VL MoE multimodal model"""
+
+    def __init__(self, config: VLConfig):
+        super().__init__()
+        self.config = config
+        self.vision_encoder = VisionEncoder(config.vision_config)
+        self.language_model = Qwen3MoEModel(config.text_config)
+
+        self.lm_head = None
+        if not config.text_config.tie_word_embeddings:
+            self.lm_head = nn.Linear(config.text_config.n_embed, config.text_config.n_vocab, bias=False)
+
+    def get_rope_index(
+        self,
+        input_ids: torch.Tensor,
+        image_grid_thw: Optional[torch.Tensor] = None,
+    ):
+        """Generate M-RoPE position indices - same as Qwen3VLDense"""
+        # Build position IDs - simple sequential for batch size 1
+        seq_len = input_ids.shape[1]
+        position_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).unsqueeze(0).expand(3, input_ids.shape[0], -1)
+
+        mrope_position_deltas = position_ids[0].max(dim=-1, keepdim=True)[0] + 1 - input_ids.shape[1]
+
+        return position_ids, mrope_position_deltas
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: Optional[torch.Tensor] = None,
+        image_grid_thw: Optional[torch.Tensor] = None,
+    ):
+        """Forward pass - same structure as Qwen3VLDense"""
+        # Process vision inputs
+        visual_features = None
+        deepstack_visual_embeds = None
+        visual_pos_masks = None
+
+        if pixel_values is not None and image_grid_thw is not None:
+            # Run vision encoder
+            visual_features, deepstack_features_list = self.vision_encoder(pixel_values, image_grid_thw)
+
+            num_layers = len(self.language_model.layers)
+            deepstack_visual_embeds = [None] * num_layers
+            if self.vision_encoder.deepstack_visual_indexes:
+                for idx, layer_idx in enumerate(self.vision_encoder.deepstack_visual_indexes):
+                    if layer_idx < num_layers:
+                        deepstack_visual_embeds[layer_idx] = deepstack_features_list[idx]
+
+            visual_pos_masks = torch.zeros(input_ids.shape[0], input_ids.shape[1], dtype=torch.bool, device=input_ids.device)
+
+        inputs_embeds = self.language_model.embed_tokens(input_ids)
+
+        if visual_features is not None:
+            pass  # TODO: Implement visual feature merging
+
+        position_ids, _ = self.get_rope_index(input_ids, image_grid_thw)
+
+        hidden_states = self.language_model(
+            inputs_embeds,
+            position_ids=position_ids,
+            visual_pos_masks=visual_pos_masks,
+            deepstack_visual_embeds=deepstack_visual_embeds,
+        )
+
+        if self.lm_head is None:
+            logits = torch.matmul(hidden_states, self.language_model.embed_tokens.weight.T)
+        else:
+            logits = self.lm_head(hidden_states)
+
+        return logits
+
+    @classmethod
+    def from_pretrained(cls, repo_id: str, device_map: str = "auto"):
+        return load_pretrained_model(cls, repo_id, device_map=device_map)
+
+
 # Maps: HuggingFace config key -> tiny-qwen config key
 HF_TO_LM_CONFIG = {
     "hidden_size": "n_embed",
     "num_attention_heads": "n_heads",
     "num_key_value_heads": "n_kv_heads",
     "num_hidden_layers": "n_layer",
-    "intermediate_size": "n_mlp",
+    "intermediate_size": "n_dense_mlp",
     "rope_theta": "rope_theta",
     "rms_norm_eps": "rms_norm_eps",
-    "vocab_size": "vocab_size",
+    "vocab_size": "n_vocab",
     "tie_word_embeddings": "tie_word_embeddings",
+    "max_position_embeddings": "max_position_embeddings",
+    "max_window_layers": "max_window_layers",
+    "eos_token_id": "eos_token_id",
     "head_dim": "head_dim",
-    # MoE parameters
-    "num_experts": "num_experts",
-    "num_experts_per_tok": "num_experts_per_tok",
-    "moe_intermediate_size": "moe_intermediate_size",
+    "num_experts": "n_experts",
+    "num_experts_per_tok": "n_experts_per_tok",
+    "moe_intermediate_size": "n_moe_mlp",
 }
 
-# Weight key mapping for loading HuggingFace pretrained language model weights
+
 # Maps: HuggingFace component name -> tiny-qwen component name
 HF_TO_LM_WEIGHTS = {}
-
