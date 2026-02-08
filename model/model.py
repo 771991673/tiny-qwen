@@ -31,6 +31,26 @@ class ModelConfig:
     n_moe_mlp: Optional[int] = None
 
 
+class KVCache:
+    def __init__(self, n_layers):
+        # each entry: (k, v) with shape [B, n_kv_heads, T_cached, d_head]
+        self.cache = [None] * n_layers
+
+    def update(self, layer_idx, k, v):
+        if self.cache[layer_idx] is not None:
+            prev_k, prev_v = self.cache[layer_idx]
+            k = torch.cat([prev_k, k], dim=2)
+            v = torch.cat([prev_v, v], dim=2)
+        self.cache[layer_idx] = (k, v)
+        return k, v
+
+    @property
+    def seq_len(self):
+        if self.cache[0] is None:
+            return 0
+        return self.cache[0][0].shape[2]
+
+
 class RotaryEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -82,7 +102,7 @@ class SelfAttention(nn.Module):
         self.q_norm = RMSNorm(self.d_head, eps=config.rms_norm_eps)
         self.k_norm = RMSNorm(self.d_head, eps=config.rms_norm_eps)
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, kv_cache=None, layer_idx=None):
         B, T, C = x.size()
 
         q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
@@ -94,12 +114,16 @@ class SelfAttention(nn.Module):
 
         q, k = self._apply_rotary_pos_emb(q, k, cos, sin)
 
+        if kv_cache is not None:
+            k, v = kv_cache.update(layer_idx, k, v)
+
         if self.n_kv_heads < self.n_heads:
             num_repeat = self.n_heads // self.n_kv_heads
             k = k.repeat_interleave(num_repeat, dim=1)
             v = v.repeat_interleave(num_repeat, dim=1)
 
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        is_causal = T > 1 and (kv_cache is None or kv_cache.seq_len == T)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.d_head)
         y = self.o_proj(y)
         return y
@@ -204,8 +228,11 @@ class Block(nn.Module):
         self.post_attention_layernorm = RMSNorm(n_embed=n_embed, eps=eps)
         self.mlp = MoEMLP(config) if config.n_experts else DenseMLP(config)
 
-    def forward(self, x, cos, sin):
-        x = x + self.self_attn(self.input_layernorm(x), cos, sin)
+    def forward(self, x, cos, sin, kv_cache=None, layer_idx=None):
+        x = x + self.self_attn(
+            self.input_layernorm(x), cos, sin,
+            kv_cache=kv_cache, layer_idx=layer_idx,
+        )
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x
 
@@ -226,13 +253,16 @@ class Model(nn.Module):
         vision_residuals=None,
         vision_mask=None,
         position_ids=None,
+        kv_cache=None,
     ):
         if vision_embed is not None and vision_mask is not None:
             input_embed[vision_mask] = vision_embed
 
         cos, sin = self.rotary_emb(input_embed, position_ids)
         for layer_idx, layer in enumerate(self.layers):
-            input_embed = layer(input_embed, cos, sin)
+            input_embed = layer(
+                input_embed, cos, sin, kv_cache=kv_cache, layer_idx=layer_idx
+            )
             if vision_residuals and vision_mask is not None:
                 # deepstack process
                 vision_residual = vision_residuals.get(layer_idx)
@@ -267,9 +297,12 @@ class Qwen3VL(nn.Module):
         input_ids: torch.Tensor,
         pixels: Optional[torch.Tensor] = None,
         d_image: Optional[torch.Tensor] = None,
+        kv_cache=None,
+        position_ids=None,
     ) -> torch.Tensor:
         input_embeds = self.model.language_model.embed_tokens(input_ids)
-        position_ids = self._get_position_ids(input_ids=input_ids, d_image=d_image)
+        if position_ids is None:
+            position_ids = self._get_position_ids(input_ids=input_ids, d_image=d_image)
 
         if pixels is not None:
             pixels = pixels.to(input_embeds.dtype)
@@ -284,10 +317,13 @@ class Qwen3VL(nn.Module):
                 vision_residuals=vision_residuals,
                 vision_mask=vision_mask,
                 position_ids=position_ids,
+                kv_cache=kv_cache,
             )
         else:
             output = self.model.language_model(
-                input_embed=input_embeds, position_ids=position_ids
+                input_embed=input_embeds,
+                position_ids=position_ids,
+                kv_cache=kv_cache,
             )
 
         logits = (
@@ -427,16 +463,23 @@ class Qwen3VL(nn.Module):
             stop_tokens = [151645, 151644, 151643]
 
         self.eval()
+        device = input_ids.device
+        B = input_ids.shape[0]
         generated_ids = input_ids
+        kv_cache = KVCache(self.config.n_layer)
 
         with torch.no_grad():
+            # prefill: process full input sequence + vision
+            position_ids = self._get_position_ids(input_ids=input_ids, d_image=d_image)
+            logits = self.forward(
+                input_ids=input_ids, pixels=pixels, d_image=d_image,
+                kv_cache=kv_cache, position_ids=position_ids,
+            )
+            next_pos = position_ids.max().item() + 1
+
+            # decode loop: one token at a time
             for _ in range(max_new_tokens):
-                logits = self.forward(
-                    input_ids=generated_ids, pixels=pixels, d_image=d_image
-                )
-                last_logits = logits[:, -1, :]
-                probs = F.softmax(last_logits, dim=-1)
-                next_token = probs.argmax(dim=-1, keepdim=True)
+                next_token = F.softmax(logits[:, -1, :], dim=-1).argmax(dim=-1, keepdim=True)
                 generated_ids = torch.cat([generated_ids, next_token], dim=1)
 
                 token_id = next_token[0].item()
@@ -444,6 +487,12 @@ class Qwen3VL(nn.Module):
 
                 if token_id in stop_tokens:
                     break
+
+                decode_pos = torch.full((3, B, 1), next_pos, dtype=torch.long, device=device)
+                logits = self.forward(
+                    input_ids=next_token, kv_cache=kv_cache, position_ids=decode_pos,
+                )
+                next_pos += 1
 
     def generate(
         self,
