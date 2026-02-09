@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
 import torch
@@ -24,11 +24,20 @@ class ModelConfig:
     rope_theta: float
     rms_norm_eps: float
 
-    # MoE parameters
+    # MoE parameters (Qwen3 VL)
     d_head: Optional[int] = None
     n_experts: Optional[int] = None
     n_experts_per_token: Optional[int] = None
     n_moe_mlp: Optional[int] = None
+
+    # Linear attention parameters (Qwen3.5)
+    layer_types: Optional[List[str]] = None
+    n_linear_k_heads: Optional[int] = None
+    n_linear_v_heads: Optional[int] = None
+    d_linear_k: Optional[int] = None
+    d_linear_v: Optional[int] = None
+    linear_conv_kernel: int = 4
+    partial_rotary_factor: float = 1.0
 
 
 class RotaryEmbedding(nn.Module):
@@ -83,15 +92,13 @@ class SelfAttention(nn.Module):
         self.k_norm = RMSNorm(self.d_head, eps=config.rms_norm_eps)
 
     def forward(self, x, cos, sin):
-        B, T, C = x.size()
+        B, T, _ = x.size()
 
         q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_kv_heads, self.d_head).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_kv_heads, self.d_head).transpose(1, 2)
 
-        q = self.q_norm(q.transpose(1, 2)).transpose(1, 2)
-        k = self.k_norm(k.transpose(1, 2)).transpose(1, 2)
-
+        q, k = self.q_norm(q), self.k_norm(k)
         q, k = self._apply_rotary_pos_emb(q, k, cos, sin)
 
         if self.n_kv_heads < self.n_heads:
@@ -119,6 +126,161 @@ class SelfAttention(nn.Module):
         return torch.cat((-x2, x1), dim=-1)
 
 
+class GatedSelfAttention(nn.Module):
+    """Full attention with output gating and partial RoPE (Qwen3.5)."""
+
+    def __init__(self, config):
+        super().__init__()
+
+        self.n_heads = config.n_heads
+        self.d_head = config.d_head
+        self.n_kv_heads = config.n_kv_heads
+        self.n_embed = config.n_embed
+        self.partial_rotary_factor = config.partial_rotary_factor
+
+        # q_proj outputs 2x: query + gate
+        self.q_proj = nn.Linear(self.n_embed, self.n_heads * self.d_head * 2, bias=False)
+        self.k_proj = nn.Linear(self.n_embed, self.n_kv_heads * self.d_head, bias=False)
+        self.v_proj = nn.Linear(self.n_embed, self.n_kv_heads * self.d_head, bias=False)
+        self.o_proj = nn.Linear(self.n_heads * self.d_head, self.n_embed, bias=False)
+
+        self.q_norm = GemmaRMSNorm(self.d_head, eps=config.rms_norm_eps)
+        self.k_norm = GemmaRMSNorm(self.d_head, eps=config.rms_norm_eps)
+
+    def forward(self, x, cos, sin):
+        B, T, _ = x.size()
+
+        # split q_proj output into query and gate
+        qg = self.q_proj(x).view(B, T, self.n_heads, self.d_head * 2)
+        q, gate = qg.chunk(2, dim=-1)
+        gate = gate.reshape(B, T, self.n_heads * self.d_head)
+
+        q = self.q_norm(q).transpose(1, 2)
+        k = self.k_norm(self.k_proj(x).view(B, T, self.n_kv_heads, self.d_head)).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_kv_heads, self.d_head).transpose(1, 2)
+
+        q, k = self._apply_partial_rotary_pos_emb(q, k, cos, sin)
+
+        if self.n_kv_heads < self.n_heads:
+            num_repeat = self.n_heads // self.n_kv_heads
+            k = k.repeat_interleave(num_repeat, dim=1)
+            v = v.repeat_interleave(num_repeat, dim=1)
+
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.d_head)
+        y = y * torch.sigmoid(gate)
+        y = self.o_proj(y)
+        return y
+
+    def _apply_partial_rotary_pos_emb(self, q, k, cos, sin):
+        rotary_dim = cos.shape[-1]
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+
+        q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
+        k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+
+        q_rot = (q_rot * cos) + (self._rotate_half(q_rot) * sin)
+        k_rot = (k_rot * cos) + (self._rotate_half(k_rot) * sin)
+
+        return torch.cat([q_rot, q_pass], dim=-1), torch.cat([k_rot, k_pass], dim=-1)
+
+    @staticmethod
+    def _rotate_half(x):
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+
+class GatedDeltaNet(nn.Module):
+    """Linear attention with gated delta rule (Qwen3.5)."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.n_k_heads = config.n_linear_k_heads
+        self.n_v_heads = config.n_linear_v_heads
+        self.d_k = config.d_linear_k
+        self.d_v = config.d_linear_v
+        self.key_dim = self.n_k_heads * self.d_k
+        self.value_dim = self.n_v_heads * self.d_v
+        conv_kernel = config.linear_conv_kernel
+
+        self.qkv_proj = nn.Linear(config.n_embed, self.key_dim * 2 + self.value_dim, bias=False)
+        self.z_proj = nn.Linear(config.n_embed, self.value_dim, bias=False)
+        self.b_proj = nn.Linear(config.n_embed, self.n_v_heads, bias=False)
+        self.a_proj = nn.Linear(config.n_embed, self.n_v_heads, bias=False)
+        self.out_proj = nn.Linear(self.value_dim, config.n_embed, bias=False)
+
+        conv_dim = self.key_dim * 2 + self.value_dim
+        self.conv1d = nn.Conv1d(
+            conv_dim, conv_dim, conv_kernel,
+            groups=conv_dim, padding=conv_kernel - 1, bias=False,
+        )
+
+        self.dt_bias = nn.Parameter(torch.ones(self.n_v_heads))
+        self.A_log = nn.Parameter(torch.empty(self.n_v_heads).uniform_(0, 16).log())
+        self.norm = RMSNormGated(self.d_v, eps=config.rms_norm_eps)
+
+    def forward(self, x):
+        B, T, _ = x.shape
+
+        # project + causal conv1d with SiLU
+        qkv = self.qkv_proj(x)
+        qkv = F.silu(self.conv1d(qkv.transpose(1, 2))[:, :, :T]).transpose(1, 2)
+
+        z = self.z_proj(x).view(B, T, self.n_v_heads, self.d_v)
+        beta = self.b_proj(x).sigmoid()
+        g = -self.A_log.float().exp() * F.softplus(self.a_proj(x).float() + self.dt_bias)
+
+        # split and reshape
+        q, k, v = torch.split(qkv, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
+        q = q.view(B, T, self.n_k_heads, self.d_k)
+        k = k.view(B, T, self.n_k_heads, self.d_k)
+        v = v.view(B, T, self.n_v_heads, self.d_v)
+
+        # GQA expansion
+        if self.n_v_heads > self.n_k_heads:
+            r = self.n_v_heads // self.n_k_heads
+            q = q.repeat_interleave(r, dim=2)
+            k = k.repeat_interleave(r, dim=2)
+
+        # delta rule attention
+        y = self._gated_delta_rule(q, k, v, g, beta)
+
+        # gated output norm + project
+        y = self.norm(y.reshape(-1, self.d_v), z.reshape(-1, self.d_v))
+        return self.out_proj(y.view(B, T, -1))
+
+    def _gated_delta_rule(self, q, k, v, g, beta):
+        """Recurrent gated delta rule with L2-normalized Q, K."""
+        q, k, v, beta, g = [
+            x.transpose(1, 2).contiguous().float() for x in (q, k, v, beta, g)
+        ]
+        q = self._l2norm(q) / (q.shape[-1] ** 0.5)
+        k = self._l2norm(k)
+
+        B, H, T, d_k = k.shape
+        d_v = v.shape[-1]
+        S = torch.zeros(B, H, d_k, d_v, device=v.device, dtype=v.dtype)
+        out = torch.zeros_like(v)
+
+        for t in range(T):
+            q_t, k_t, v_t = q[:, :, t], k[:, :, t], v[:, :, t]
+            g_t = g[:, :, t].exp().unsqueeze(-1).unsqueeze(-1)
+            beta_t = beta[:, :, t].unsqueeze(-1)
+
+            S = S * g_t
+            delta = (v_t - (S * k_t.unsqueeze(-1)).sum(-2)) * beta_t
+            S = S + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
+            out[:, :, t] = (S * q_t.unsqueeze(-1)).sum(-2)
+
+        return out.transpose(1, 2).contiguous().to(q.dtype)
+
+    @staticmethod
+    def _l2norm(x, eps=1e-6):
+        return x * torch.rsqrt((x * x).sum(-1, keepdim=True) + eps)
+
+
 class RMSNorm(nn.Module):
     def __init__(self, n_embed, eps=1e-6):
         super().__init__()
@@ -131,6 +293,39 @@ class RMSNorm(nn.Module):
         variance = x.pow(2).mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * x.to(input_dtype)
+
+
+class GemmaRMSNorm(nn.Module):
+    """RMSNorm with (1 + weight) formulation, weight initialized to 0."""
+
+    def __init__(self, n_embed, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(n_embed))
+        self.variance_epsilon = eps
+
+    def forward(self, x):
+        input_dtype = x.dtype
+        x = x.to(torch.float32)
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.variance_epsilon)
+        return ((1.0 + self.weight.float()) * x).to(input_dtype)
+
+
+class RMSNormGated(nn.Module):
+    """RMSNorm followed by SiLU gating (for GatedDeltaNet output)."""
+
+    def __init__(self, n_embed, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(n_embed))
+        self.variance_epsilon = eps
+
+    def forward(self, x, gate):
+        input_dtype = x.dtype
+        x = x.to(torch.float32)
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.variance_epsilon)
+        x = self.weight * x.to(input_dtype)
+        return x * F.silu(gate.to(torch.float32)).to(input_dtype)
 
 
 class DenseMLP(nn.Module):
@@ -196,16 +391,40 @@ class MoEMLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx=0):
         super().__init__()
         n_embed, eps = config.n_embed, config.rms_norm_eps
-        self.input_layernorm = RMSNorm(n_embed=n_embed, eps=eps)
-        self.self_attn = SelfAttention(config)
-        self.post_attention_layernorm = RMSNorm(n_embed=n_embed, eps=eps)
+
+        # Determine layer type
+        layer_type = "full_attention"
+        if config.layer_types is not None:
+            layer_type = config.layer_types[layer_idx]
+
+        self.layer_type = layer_type
+        is_qwen35 = config.layer_types is not None
+
+        # Norm class depends on model variant
+        NormClass = GemmaRMSNorm if is_qwen35 else RMSNorm
+        self.input_layernorm = NormClass(n_embed=n_embed, eps=eps)
+        self.post_attention_layernorm = NormClass(n_embed=n_embed, eps=eps)
+
+        # Attention layer
+        if layer_type == "linear_attention":
+            self.linear_attn = GatedDeltaNet(config)
+        else:
+            if is_qwen35:
+                self.self_attn = GatedSelfAttention(config)
+            else:
+                self.self_attn = SelfAttention(config)
+
+        # MLP
         self.mlp = MoEMLP(config) if config.n_experts else DenseMLP(config)
 
     def forward(self, x, cos, sin):
-        x = x + self.self_attn(self.input_layernorm(x), cos, sin)
+        if self.layer_type == "linear_attention":
+            x = x + self.linear_attn(self.input_layernorm(x))
+        else:
+            x = x + self.self_attn(self.input_layernorm(x), cos, sin)
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x
 
@@ -216,14 +435,19 @@ class Model(nn.Module):
         self.embed_tokens = nn.Embedding(config.n_vocab, config.n_embed)
         self.rotary_emb = RotaryEmbedding(config)
 
-        self.layers = nn.ModuleList(Block(config) for _ in range(config.n_layer))
+        self.layers = nn.ModuleList(
+            Block(config, layer_idx=i) for i in range(config.n_layer)
+        )
         self.norm = RMSNorm(config.n_embed, eps=config.rms_norm_eps)
+
+        # Use GemmaRMSNorm for Qwen3.5
+        if config.layer_types is not None:
+            self.norm = GemmaRMSNorm(config.n_embed, eps=config.rms_norm_eps)
 
     def forward(
         self,
         input_embed,
         vision_embed=None,
-        vision_residuals=None,
         vision_mask=None,
         position_ids=None,
     ):
@@ -231,15 +455,8 @@ class Model(nn.Module):
             input_embed[vision_mask] = vision_embed
 
         cos, sin = self.rotary_emb(input_embed, position_ids)
-        for layer_idx, layer in enumerate(self.layers):
+        for layer in self.layers:
             input_embed = layer(input_embed, cos, sin)
-            if vision_residuals and vision_mask is not None:
-                # deepstack process
-                vision_residual = vision_residuals.get(layer_idx)
-                if vision_residual is not None:
-                    input_embed[vision_mask] = (
-                        input_embed[vision_mask] + vision_residual
-                    )
 
         input_embed = self.norm(input_embed)
         return input_embed
@@ -273,15 +490,13 @@ class Qwen3VL(nn.Module):
 
         if pixels is not None:
             pixels = pixels.to(input_embeds.dtype)
-            vision_embed, vision_residuals = self.model.visual(
-                pixels=pixels, d_image=d_image
-            )
+            vision_embed = self.model.visual(pixels=pixels, d_image=d_image)
             image_pad_token = getattr(self.config, "image_token_id", 151655)
             vision_mask = input_ids == image_pad_token
+
             output = self.model.language_model(
                 input_embed=input_embeds,
                 vision_embed=vision_embed,
-                vision_residuals=vision_residuals,
                 vision_mask=vision_mask,
                 position_ids=position_ids,
             )
@@ -370,6 +585,7 @@ class Qwen3VL(nn.Module):
             hf_config = json.load(f)
 
         llm_config = hf_config["text_config"]
+
         config = ModelConfig(
             n_embed=llm_config["hidden_size"],
             n_heads=llm_config["num_attention_heads"],
@@ -378,12 +594,21 @@ class Qwen3VL(nn.Module):
             n_mlp=llm_config["intermediate_size"],
             n_vocab=llm_config["vocab_size"],
             tie_word_embeddings=hf_config["tie_word_embeddings"],
-            rope_theta=llm_config["rope_theta"],
+            rope_theta=llm_config.get("rope_parameters", {}).get("rope_theta")
+                       or llm_config.get("rope_theta"),
             rms_norm_eps=llm_config["rms_norm_eps"],
             d_head=llm_config.get("head_dim"),
             n_experts=llm_config.get("num_experts"),
             n_experts_per_token=llm_config.get("num_experts_per_tok"),
             n_moe_mlp=llm_config.get("moe_intermediate_size"),
+            # Qwen3.5 linear attention params
+            layer_types=llm_config.get("layer_types"),
+            n_linear_k_heads=llm_config.get("linear_num_key_heads"),
+            n_linear_v_heads=llm_config.get("linear_num_value_heads"),
+            d_linear_k=llm_config.get("linear_key_head_dim"),
+            d_linear_v=llm_config.get("linear_value_head_dim"),
+            linear_conv_kernel=llm_config.get("linear_conv_kernel_dim", 4),
+            partial_rotary_factor=llm_config.get("partial_rotary_factor", 1.0),
         )
 
         vision_config = None
@@ -395,7 +620,6 @@ class Qwen3VL(nn.Module):
                 n_heads=vision_config_data["num_heads"],
                 n_output_embed=vision_config_data["out_hidden_size"],
                 n_mlp=vision_config_data["intermediate_size"],
-                deepstack_visual_indexes=vision_config_data["deepstack_visual_indexes"],
                 num_position_embeddings=vision_config_data["num_position_embeddings"],
                 in_channels=vision_config_data["in_channels"],
                 temporal_patch_size=vision_config_data["temporal_patch_size"],

@@ -173,7 +173,7 @@ def main():
                 console.print(f"Failed to load model: {e}")
                 return
 
-        if not model or not processor:
+        if model is None or processor is None:
             console.print("Failed to initialize processor. Exiting...", style="red")
             return
 

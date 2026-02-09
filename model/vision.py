@@ -12,7 +12,6 @@ class VisionConfig:
     n_heads: int
     n_output_embed: int
     n_mlp: int
-    deepstack_visual_indexes: list[int]
     num_position_embeddings: int
 
     in_channels: int = 3
@@ -205,13 +204,6 @@ class VisionEncoder(nn.Module):
         head_dim = config.n_embed // config.n_heads
         self.rotary_pos_emb = VisionRotaryEmbedding(head_dim // 2)
         self.spatial_merge_size = config.spatial_merge_size
-        self.deepstack_visual_indexes = config.deepstack_visual_indexes
-        self.deepstack_merger_list = nn.ModuleList(
-            [
-                PatchMerger(config, use_postshuffle_norm=True)
-                for _ in range(len(config.deepstack_visual_indexes))
-            ]
-        )
 
     def fast_pos_embed_interpolate(self, d_image: torch.Tensor) -> torch.Tensor:
         """Interpolate learned position embeddings to match image dimensions."""
@@ -304,7 +296,7 @@ class VisionEncoder(nn.Module):
 
     def forward(
         self, pixels: torch.Tensor, d_image: torch.Tensor
-    ) -> tuple[torch.Tensor, dict[int, torch.Tensor]]:
+    ) -> torch.Tensor:
         hidden_states = self.patch_embed(pixels)
 
         # Add learnable position embeddings
@@ -317,15 +309,9 @@ class VisionEncoder(nn.Module):
         ).cumsum(dim=0, dtype=torch.int32)
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
-        deepstack_features: dict[int, torch.Tensor] = {}
-        for layer_num, blk in enumerate(self.blocks):
+        for blk in self.blocks:
             hidden_states = blk(
                 hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
             )
-            if layer_num in self.deepstack_visual_indexes:
-                ds_idx = self.deepstack_visual_indexes.index(layer_num)
-                deepstack_features[layer_num] = self.deepstack_merger_list[ds_idx](
-                    hidden_states
-                )
 
-        return self.merger(hidden_states), deepstack_features
+        return self.merger(hidden_states)
