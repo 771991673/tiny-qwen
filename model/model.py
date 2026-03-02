@@ -23,12 +23,14 @@ class ModelConfig:
 
     rope_theta: float
     rms_norm_eps: float
+    image_token_id: int = 151655
 
     # MoE parameters (Qwen3 VL)
     d_head: Optional[int] = None
     n_experts: Optional[int] = None
     n_experts_per_token: Optional[int] = None
     n_moe_mlp: Optional[int] = None
+    n_shared_expert_mlp: Optional[int] = None
 
     # Linear attention parameters (Qwen3.5)
     layer_types: Optional[List[str]] = None
@@ -205,10 +207,13 @@ class GatedDeltaNet(nn.Module):
         self.value_dim = self.n_v_heads * self.d_v
         conv_kernel = config.linear_conv_kernel
 
-        self.qkv_proj = nn.Linear(config.n_embed, self.key_dim * 2 + self.value_dim, bias=False)
-        self.z_proj = nn.Linear(config.n_embed, self.value_dim, bias=False)
-        self.b_proj = nn.Linear(config.n_embed, self.n_v_heads, bias=False)
-        self.a_proj = nn.Linear(config.n_embed, self.n_v_heads, bias=False)
+        # Keep naming aligned with HF Qwen3.5 checkpoints.
+        self.in_proj_qkv = nn.Linear(
+            config.n_embed, self.key_dim * 2 + self.value_dim, bias=False
+        )
+        self.in_proj_z = nn.Linear(config.n_embed, self.value_dim, bias=False)
+        self.in_proj_b = nn.Linear(config.n_embed, self.n_v_heads, bias=False)
+        self.in_proj_a = nn.Linear(config.n_embed, self.n_v_heads, bias=False)
         self.out_proj = nn.Linear(self.value_dim, config.n_embed, bias=False)
 
         conv_dim = self.key_dim * 2 + self.value_dim
@@ -225,12 +230,14 @@ class GatedDeltaNet(nn.Module):
         B, T, _ = x.shape
 
         # project + causal conv1d with SiLU
-        qkv = self.qkv_proj(x)
+        qkv = self.in_proj_qkv(x)
         qkv = F.silu(self.conv1d(qkv.transpose(1, 2))[:, :, :T]).transpose(1, 2)
 
-        z = self.z_proj(x).view(B, T, self.n_v_heads, self.d_v)
-        beta = self.b_proj(x).sigmoid()
-        g = -self.A_log.float().exp() * F.softplus(self.a_proj(x).float() + self.dt_bias)
+        z = self.in_proj_z(x).view(B, T, self.n_v_heads, self.d_v)
+        beta = self.in_proj_b(x).sigmoid()
+        g = -self.A_log.float().exp() * F.softplus(
+            self.in_proj_a(x).float() + self.dt_bias
+        )
 
         # split and reshape
         q, k, v = torch.split(qkv, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
@@ -253,6 +260,7 @@ class GatedDeltaNet(nn.Module):
 
     def _gated_delta_rule(self, q, k, v, g, beta):
         """Recurrent gated delta rule with L2-normalized Q, K."""
+        out_dtype = q.dtype
         q, k, v, beta, g = [
             x.transpose(1, 2).contiguous().float() for x in (q, k, v, beta, g)
         ]
@@ -274,7 +282,7 @@ class GatedDeltaNet(nn.Module):
             S = S + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
             out[:, :, t] = (S * q_t.unsqueeze(-1)).sum(-2)
 
-        return out.transpose(1, 2).contiguous().to(q.dtype)
+        return out.transpose(1, 2).contiguous().to(out_dtype)
 
     @staticmethod
     def _l2norm(x, eps=1e-6):
@@ -339,6 +347,17 @@ class DenseMLP(nn.Module):
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
+class SharedExpertMLP(nn.Module):
+    def __init__(self, hidden_size: int, intermediate_size: int):
+        super().__init__()
+        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+
+    def forward(self, x):
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+
+
 class MoEExperts(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -346,19 +365,49 @@ class MoEExperts(nn.Module):
         self.hidden_size = config.n_embed
         self.expert_dim = config.n_moe_mlp
 
+        # Shapes are aligned with HF Qwen3.5-MoE checkpoints.
         self.gate_up_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.hidden_size, 2 * self.expert_dim)
+            torch.empty(self.num_experts, 2 * self.expert_dim, self.hidden_size)
         )
         self.down_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.expert_dim, self.hidden_size)
+            torch.empty(self.num_experts, self.hidden_size, self.expert_dim)
         )
 
-    def forward(self, x: torch.Tensor, routing_weights: torch.Tensor) -> torch.Tensor:
-        gate_up = torch.einsum("th,ehq->teq", x, self.gate_up_proj)
-        gate, up = gate_up.chunk(2, dim=-1)
-        expert_outputs = torch.einsum("teq,eqh->teh", F.silu(gate) * up, self.down_proj)
-        weighted = expert_outputs * routing_weights.unsqueeze(-1)
-        return weighted.sum(dim=1)
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        top_k_index: torch.Tensor,
+        top_k_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        final_hidden_states = torch.zeros_like(hidden_states)
+        with torch.no_grad():
+            expert_mask = torch.nn.functional.one_hot(
+                top_k_index, num_classes=self.num_experts
+            )
+            expert_mask = expert_mask.permute(2, 1, 0)
+            expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+
+        for expert_idx in expert_hit:
+            expert_idx = expert_idx[0]
+            if expert_idx == self.num_experts:
+                continue
+            top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
+            current_state = hidden_states[token_idx]
+            gate, up = F.linear(current_state, self.gate_up_proj[expert_idx]).chunk(
+                2, dim=-1
+            )
+            current_hidden_states = F.silu(gate) * up
+            current_hidden_states = F.linear(
+                current_hidden_states, self.down_proj[expert_idx]
+            )
+            current_hidden_states = (
+                current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            )
+            final_hidden_states.index_add_(
+                0, token_idx, current_hidden_states.to(final_hidden_states.dtype)
+            )
+
+        return final_hidden_states
 
 
 class MoEMLP(nn.Module):
@@ -368,26 +417,38 @@ class MoEMLP(nn.Module):
         self.expert_dim = config.n_moe_mlp
         self.num_experts = config.n_experts
         self.top_k = config.n_experts_per_token
+        self.shared_expert_dim = getattr(config, "n_shared_expert_mlp", None)
         self.gate = nn.Linear(self.hidden_size, self.num_experts, bias=False)
         self.experts = MoEExperts(config)
+        self.shared_expert = None
+        self.shared_expert_gate = None
+        if self.shared_expert_dim:
+            # Name must match HF checkpoint: mlp.shared_expert.{gate,up,down}_proj.weight
+            self.shared_expert = SharedExpertMLP(
+                hidden_size=self.hidden_size,
+                intermediate_size=self.shared_expert_dim,
+            )
+            self.shared_expert_gate = nn.Linear(self.hidden_size, 1, bias=False)
 
     def forward(self, x):
         B, T, _ = x.shape
         hidden = x.reshape(-1, self.hidden_size)
 
-        router_logits = self.gate(hidden)
-        routing_weights = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
-        topk_weights, topk_indices = torch.topk(routing_weights, self.top_k, dim=-1)
+        router_logits = F.linear(hidden, self.gate.weight)
+        router_logits = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
+        topk_weights, topk_indices = torch.topk(router_logits, self.top_k, dim=-1)
         topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-9)
-        routed = torch.zeros_like(router_logits)
         topk_weights = topk_weights.to(router_logits.dtype)
-        routed.scatter_(1, topk_indices, topk_weights)
-        routed = routed / (routed.sum(dim=-1, keepdim=True) + 1e-9)
-        routed = routed.to(hidden.dtype)
-        expert_out = self.experts(hidden, routed)
-        combined = expert_out.view(B, T, self.hidden_size)
+        expert_out = self.experts(hidden, topk_indices, topk_weights)
 
-        return combined
+        if self.shared_expert is not None and self.shared_expert_gate is not None:
+            shared_expert_out = self.shared_expert(hidden)
+            shared_expert_out = torch.sigmoid(
+                self.shared_expert_gate(hidden)
+            ) * shared_expert_out
+            expert_out = expert_out + shared_expert_out
+
+        return expert_out.view(B, T, self.hidden_size)
 
 
 class Block(nn.Module):
@@ -491,8 +552,15 @@ class Qwen3VL(nn.Module):
         if pixels is not None:
             pixels = pixels.to(input_embeds.dtype)
             vision_embed = self.model.visual(pixels=pixels, d_image=d_image)
-            image_pad_token = getattr(self.config, "image_token_id", 151655)
+            image_pad_token = self.config.image_token_id
             vision_mask = input_ids == image_pad_token
+            if vision_mask.sum().item() != vision_embed.shape[0]:
+                raise RuntimeError(
+                    "Vision token/feature mismatch: "
+                    f"mask_tokens={vision_mask.sum().item()} "
+                    f"vision_features={vision_embed.shape[0]} "
+                    f"image_token_id={image_pad_token}"
+                )
 
             output = self.model.language_model(
                 input_embed=input_embeds,
@@ -516,7 +584,7 @@ class Qwen3VL(nn.Module):
         self, input_ids: torch.Tensor, d_image: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         B, T = input_ids.shape
-        image_pad_token = getattr(self.config, "image_token_id", 151655)
+        image_pad_token = self.config.image_token_id
 
         # text-only case: sequential position IDs repeated 3 times
         if d_image is None:
@@ -586,14 +654,21 @@ class Qwen3VL(nn.Module):
 
         llm_config = hf_config["text_config"]
 
+        n_mlp = llm_config.get("intermediate_size")
+        if n_mlp is None:
+            n_mlp = llm_config.get("shared_expert_intermediate_size")
+        if n_mlp is None:
+            n_mlp = llm_config.get("moe_intermediate_size")
+
         config = ModelConfig(
             n_embed=llm_config["hidden_size"],
             n_heads=llm_config["num_attention_heads"],
             n_kv_heads=llm_config["num_key_value_heads"],
             n_layer=llm_config["num_hidden_layers"],
-            n_mlp=llm_config["intermediate_size"],
+            n_mlp=n_mlp,
             n_vocab=llm_config["vocab_size"],
             tie_word_embeddings=hf_config["tie_word_embeddings"],
+            image_token_id=hf_config.get("image_token_id", 151655),
             rope_theta=llm_config.get("rope_parameters", {}).get("rope_theta")
                        or llm_config.get("rope_theta"),
             rms_norm_eps=llm_config["rms_norm_eps"],
@@ -601,6 +676,7 @@ class Qwen3VL(nn.Module):
             n_experts=llm_config.get("num_experts"),
             n_experts_per_token=llm_config.get("num_experts_per_tok"),
             n_moe_mlp=llm_config.get("moe_intermediate_size"),
+            n_shared_expert_mlp=llm_config.get("shared_expert_intermediate_size"),
             # Qwen3.5 linear attention params
             layer_types=llm_config.get("layer_types"),
             n_linear_k_heads=llm_config.get("linear_num_key_heads"),
@@ -634,6 +710,7 @@ class Qwen3VL(nn.Module):
             device_map=device_map,
             no_split_module_classes=["Block", "VisionBlock"],
             dtype=torch.bfloat16,
+            skip_keys=["mtp."],
         )
 
         return model

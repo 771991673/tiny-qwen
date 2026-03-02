@@ -2,7 +2,7 @@ import torch
 from transformers import AutoProcessor
 from model.processor import Processor
 
-MODEL_NAME = "Qwen/Qwen3-VL-2B-Instruct"
+MODEL_NAME = "Qwen/Qwen3.5-27B"
 
 
 def test_text_only():
@@ -101,7 +101,7 @@ def test_single_image():
     hf_proc = AutoProcessor.from_pretrained(MODEL_NAME)
     our_proc = Processor.from_pretrained(MODEL_NAME)
 
-    url = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+    url = "test/data/test-img-1.jpg"
 
     # HF uses "image" key, we use "url" key
     hf_messages = [
@@ -142,8 +142,8 @@ def test_multi_image():
     hf_proc = AutoProcessor.from_pretrained(MODEL_NAME)
     our_proc = Processor.from_pretrained(MODEL_NAME)
 
-    url1 = "https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vl_arc.jpg"
-    url2 = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+    url1 = "test/data/test-img-1.jpg"
+    url2 = "test/data/test-img-2.jpg"
 
     # HF uses "image" key, we use "url" key
     hf_messages = [

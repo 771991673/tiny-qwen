@@ -1,0 +1,11 @@
+{
+  "image_path": "test/data/test-img-1.jpg",
+  "prompt": "Describe this image accurately in 2-3 sentences.",
+  "max_new_tokens": 128,
+  "attn_implementation": "sdpa",
+  "enable_thinking": false,
+  "outputs": {
+    "Qwen/Qwen3.5-27B": "A vibrant sunflower dominates the foreground, its bright yellow petals radiating outward from a rich, textured center where a bee is actively foraging. The background reveals a vast field of similar sunflowers stretching into the distance under a soft, overcast sky, creating a serene and natural rural scene. The shallow depth of field keeps the main flower and bee in sharp focus while gently blurring the surrounding blooms, emphasizing the intimate moment of pollination.",
+    "Qwen/Qwen3.5-35B-A3B": "A vibrant sunflower dominates the foreground, its bright yellow petals radiating outward from a rich brown center where two bees are busily collecting nectar. The background is softly blurred, revealing a vast field of similar sunflowers stretching toward distant hills under a pale blue sky with wispy clouds. The scene evokes warmth, natural beauty, and the lively activity of pollinators in a summer landscape."
+  }
+}

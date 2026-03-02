@@ -47,16 +47,8 @@ Use @relative/path/to/image.jpg to include images in your messages.
 """
 
 ALL_MODELS = [
-    "Qwen/Qwen3-VL-2B-Instruct",
-    "Qwen/Qwen3-VL-2B-Thinking",
-    "Qwen/Qwen3-VL-4B-Instruct",
-    "Qwen/Qwen3-VL-4B-Thinking",
-    "Qwen/Qwen3-VL-8B-Instruct",
-    "Qwen/Qwen3-VL-8B-Thinking",
-    "Qwen/Qwen3-VL-30B-A3B-Instruct",
-    "Qwen/Qwen3-VL-30B-A3B-Thinking",
-    "Qwen/Qwen3-VL-32B-Instruct",
-    "Qwen/Qwen3-VL-32B-Thinking",
+    "Qwen/Qwen3.5-27B",
+    "Qwen/Qwen3.5-35B-A3B",
 ]
 
 STYLE = Style(

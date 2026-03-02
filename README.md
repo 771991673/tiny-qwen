@@ -8,9 +8,9 @@
 
 ## ✨ Tiny Qwen
 
-A minimal, easy-to-read PyTorch re-implementation of of `Qwen3-VL`. Supports text and vision as well as dense and mixture of experts.
+A minimal, easy-to-read PyTorch re-implementation of `Qwen3.5` vision-language models. Supports text+vision as well as dense and mixture-of-experts variants.
 
-For `Qwen3` (text-only) and `Qwen2.5 VL` support, see [this branch](https://github.com/Emericen/tiny-qwen/tree/legacy/qwen2_5). 
+For older model implementations, see dedicated legacy branches in this repository.
 
 For `DeepSeek R1`, see [this repo](https://github.com/Emericen/tiny-deepseek-r1).
 
@@ -37,7 +37,7 @@ python run.py
 
 ## 📝 Code Examples
 
-Using `Qwen3VL` class in code:
+Using the `Qwen3VL` class in code (the class name is kept for API compatibility):
 
 ```python
 from PIL import Image
@@ -57,7 +57,7 @@ messages = [
     },
 ]
 
-model_name = "Qwen/Qwen3-VL-4B-Instruct"
+model_name = "Qwen/Qwen3.5-27B"
 weights = snapshot_download(repo_id=model_name, cache_dir=".cache")
 model = Qwen3VL.from_pretrained(weights_path=weights, device_map="auto")
 processor = Processor.from_pretrained(model_name)
