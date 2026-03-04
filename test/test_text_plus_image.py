@@ -14,7 +14,14 @@ from model.model import Qwen3VL
 from model.processor import Processor
 
 REFERENCE_JSON = Path("test/data/qwen35_transformers_mm_outputs.json")
-DEFAULT_MODELS = ["Qwen/Qwen3.5-27B", "Qwen/Qwen3.5-35B-A3B"]
+DEFAULT_MODELS = [
+    "Qwen/Qwen3.5-0.8B",
+    "Qwen/Qwen3.5-2B",
+    "Qwen/Qwen3.5-4B",
+    "Qwen/Qwen3.5-9B",
+    "Qwen/Qwen3.5-27B",
+    "Qwen/Qwen3.5-35B-A3B",
+]
 
 
 def _get_stop_tokens(processor: Processor) -> list[int]:

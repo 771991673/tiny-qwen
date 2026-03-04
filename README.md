@@ -10,7 +10,9 @@
 
 A minimal, easy-to-read PyTorch re-implementation of `Qwen3.5` vision-language models. Supports text+vision as well as dense and mixture-of-experts variants.
 
-For older model implementations, see dedicated legacy branches in this repository.
+For `Qwen3-VL` implementation (former `main`), see [this branch](https://github.com/Emericen/tiny-qwen/tree/legacy/qwen3_vl).
+
+For `Qwen3` (text-only) and `Qwen2.5 VL` support, see [this branch](https://github.com/Emericen/tiny-qwen/tree/legacy/qwen2_5).
 
 For `DeepSeek R1`, see [this repo](https://github.com/Emericen/tiny-deepseek-r1).
 
@@ -34,6 +36,41 @@ python run.py
 ```
 
 **Note:** Use `@relative/path/to/image.jpg` to reference images.
+
+## 🧪 Ultimate Side-by-Side Test
+
+Run one script that iterates model variants and prints:
+1. Hugging Face Transformers output
+2. Tiny-Qwen output
+
+for the same image + prompt context, back-to-back per model.
+
+```bash
+python test/run_ultimate_compare.py
+```
+
+By default it runs:
+
+- `Qwen/Qwen3.5-0.8B`
+- `Qwen/Qwen3.5-2B`
+- `Qwen/Qwen3.5-4B`
+- `Qwen/Qwen3.5-9B`
+- `Qwen/Qwen3.5-27B`
+- `Qwen/Qwen3.5-35B-A3B`
+
+Useful flags:
+
+```bash
+# subset of models
+python test/run_ultimate_compare.py --models Qwen/Qwen3.5-2B Qwen/Qwen3.5-9B
+
+# custom image/prompt/tokens
+python test/run_ultimate_compare.py \
+  --image-path test/data/test-img-1.jpg \
+  --prompt "Describe this image accurately in 2-3 sentences." \
+  --max-new-tokens 128 \
+  --no-enable-thinking
+```
 
 ## 📝 Code Examples
 

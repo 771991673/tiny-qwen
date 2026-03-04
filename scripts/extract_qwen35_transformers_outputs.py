@@ -3,22 +3,21 @@ import json
 from pathlib import Path
 
 import torch
-from transformers import (
-    AutoProcessor,
-    Qwen3_5ForConditionalGeneration,
-    Qwen3_5MoeForConditionalGeneration,
-)
+from transformers import AutoProcessor
+
+try:
+    from transformers import AutoModelForImageTextToText as AutoModelForVL
+except ImportError:
+    from transformers import AutoModelForVision2Seq as AutoModelForVL
 
 DEFAULT_MODELS = [
+    "Qwen/Qwen3.5-0.8B",
+    "Qwen/Qwen3.5-2B",
+    "Qwen/Qwen3.5-4B",
+    "Qwen/Qwen3.5-9B",
     "Qwen/Qwen3.5-27B",
     "Qwen/Qwen3.5-35B-A3B",
 ]
-
-
-def _model_class(model_name: str):
-    return Qwen3_5MoeForConditionalGeneration if "A3B" in model_name else Qwen3_5ForConditionalGeneration
-
-
 def _build_messages(image_path: str, prompt: str) -> list[dict]:
     return [
         {
@@ -39,11 +38,9 @@ def run_inference_for_model(
     attn_implementation: str,
     enable_thinking: bool,
 ) -> str:
-    model_cls = _model_class(model_name)
-
-    model = model_cls.from_pretrained(
+    model = AutoModelForVL.from_pretrained(
         model_name,
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation=attn_implementation,
     )
