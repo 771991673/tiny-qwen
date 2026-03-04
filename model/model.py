@@ -77,58 +77,6 @@ class RotaryEmbedding(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        self.n_heads = config.n_heads
-        self.d_head = config.d_head
-        self.n_kv_heads = config.n_kv_heads
-        self.n_embed = config.n_embed
-
-        self.q_proj = nn.Linear(self.n_embed, self.n_heads * self.d_head, bias=False)
-        self.k_proj = nn.Linear(self.n_embed, self.n_kv_heads * self.d_head, bias=False)
-        self.v_proj = nn.Linear(self.n_embed, self.n_kv_heads * self.d_head, bias=False)
-        self.o_proj = nn.Linear(self.n_heads * self.d_head, self.n_embed, bias=False)
-
-        self.q_norm = RMSNorm(self.d_head, eps=config.rms_norm_eps)
-        self.k_norm = RMSNorm(self.d_head, eps=config.rms_norm_eps)
-
-    def forward(self, x, cos, sin):
-        B, T, _ = x.size()
-
-        q = self.q_proj(x).view(B, T, self.n_heads, self.d_head).transpose(1, 2)
-        k = self.k_proj(x).view(B, T, self.n_kv_heads, self.d_head).transpose(1, 2)
-        v = self.v_proj(x).view(B, T, self.n_kv_heads, self.d_head).transpose(1, 2)
-
-        q, k = self.q_norm(q), self.k_norm(k)
-        q, k = self._apply_rotary_pos_emb(q, k, cos, sin)
-
-        if self.n_kv_heads < self.n_heads:
-            num_repeat = self.n_heads // self.n_kv_heads
-            k = k.repeat_interleave(num_repeat, dim=1)
-            v = v.repeat_interleave(num_repeat, dim=1)
-
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.d_head)
-        y = self.o_proj(y)
-        return y
-
-    @staticmethod
-    def _apply_rotary_pos_emb(q, k, cos, sin):
-        cos = cos.unsqueeze(1)
-        sin = sin.unsqueeze(1)
-        q_embed = (q * cos) + (SelfAttention._rotate_half(q) * sin)
-        k_embed = (k * cos) + (SelfAttention._rotate_half(k) * sin)
-        return q_embed, k_embed
-
-    @staticmethod
-    def _rotate_half(x):
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
-
-
-class GatedSelfAttention(nn.Module):
     """Full attention with output gating and partial RoPE (Qwen3.5)."""
 
     def __init__(self, config):
@@ -462,21 +410,14 @@ class Block(nn.Module):
             layer_type = config.layer_types[layer_idx]
 
         self.layer_type = layer_type
-        is_qwen35 = config.layer_types is not None
-
-        # Norm class depends on model variant
-        NormClass = GemmaRMSNorm if is_qwen35 else RMSNorm
-        self.input_layernorm = NormClass(n_embed=n_embed, eps=eps)
-        self.post_attention_layernorm = NormClass(n_embed=n_embed, eps=eps)
+        self.input_layernorm = GemmaRMSNorm(n_embed=n_embed, eps=eps)
+        self.post_attention_layernorm = GemmaRMSNorm(n_embed=n_embed, eps=eps)
 
         # Attention layer
         if layer_type == "linear_attention":
             self.linear_attn = GatedDeltaNet(config)
         else:
-            if is_qwen35:
-                self.self_attn = GatedSelfAttention(config)
-            else:
-                self.self_attn = SelfAttention(config)
+            self.self_attn = SelfAttention(config)
 
         # MLP
         self.mlp = MoEMLP(config) if config.n_experts else DenseMLP(config)
@@ -499,11 +440,7 @@ class Model(nn.Module):
         self.layers = nn.ModuleList(
             Block(config, layer_idx=i) for i in range(config.n_layer)
         )
-        self.norm = RMSNorm(config.n_embed, eps=config.rms_norm_eps)
-
-        # Use GemmaRMSNorm for Qwen3.5
-        if config.layer_types is not None:
-            self.norm = GemmaRMSNorm(config.n_embed, eps=config.rms_norm_eps)
+        self.norm = GemmaRMSNorm(config.n_embed, eps=config.rms_norm_eps)
 
     def forward(
         self,

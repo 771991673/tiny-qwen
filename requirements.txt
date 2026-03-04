@@ -10,5 +10,5 @@ typer==0.15.3
 rich==14.0.0
 questionary==2.0.1
 lightning==2.5.3
-transformers
+transformers>=5.2.0
 pytest
