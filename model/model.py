@@ -301,92 +301,84 @@ class SharedExpertMLP(nn.Module):
 class MoEExperts(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.num_experts = config.n_experts
-        self.hidden_size = config.n_embed
-        self.expert_dim = config.n_moe_mlp
+        self.n_experts = config.n_experts
+        self.n_embed = config.n_embed
+        self.n_moe_mlp = config.n_moe_mlp
 
         self.gate_up_proj = nn.Parameter(
-            torch.empty(self.num_experts, 2 * self.expert_dim, self.hidden_size)
+            torch.empty(self.n_experts, 2 * self.n_moe_mlp, self.n_embed)
         )
         self.down_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.hidden_size, self.expert_dim)
+            torch.empty(self.n_experts, self.n_embed, self.n_moe_mlp)
         )
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        x: torch.Tensor,
         top_k_index: torch.Tensor,
         top_k_weights: torch.Tensor,
     ) -> torch.Tensor:
-        final_hidden_states = torch.zeros_like(hidden_states)
+        x_out = torch.zeros_like(x)
         with torch.no_grad():
             expert_mask = torch.nn.functional.one_hot(
-                top_k_index, num_classes=self.num_experts
+                top_k_index, num_classes=self.n_experts
             )
             expert_mask = expert_mask.permute(2, 1, 0)
             expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
 
         for expert_idx in expert_hit:
             expert_idx = expert_idx[0]
-            if expert_idx == self.num_experts:
+            if expert_idx == self.n_experts:
                 continue
             top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
-            current_state = hidden_states[token_idx]
-            gate, up = F.linear(current_state, self.gate_up_proj[expert_idx]).chunk(
-                2, dim=-1
-            )
-            current_hidden_states = F.silu(gate) * up
-            current_hidden_states = F.linear(
-                current_hidden_states, self.down_proj[expert_idx]
-            )
-            current_hidden_states = (
-                current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
-            )
-            final_hidden_states.index_add_(
-                0, token_idx, current_hidden_states.to(final_hidden_states.dtype)
-            )
+            x_curr = x[token_idx]
+            gate, up = F.linear(x_curr, self.gate_up_proj[expert_idx]).chunk(2, dim=-1)
+            x_curr = F.silu(gate) * up
+            x_curr = F.linear(x_curr, self.down_proj[expert_idx])
+            x_curr = x_curr * top_k_weights[token_idx, top_k_pos, None]
+            x_out.index_add_(0, token_idx, x_curr.to(x_out.dtype))
 
-        return final_hidden_states
+        return x_out
 
 
 class MoEMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.hidden_size = config.n_embed
-        self.expert_dim = config.n_moe_mlp
-        self.num_experts = config.n_experts
+        self.n_embed = config.n_embed
+        self.n_moe_mlp = config.n_moe_mlp
+        self.n_experts = config.n_experts
         self.top_k = config.n_experts_per_token
         self.shared_expert_dim = getattr(config, "n_shared_expert_mlp", None)
-        self.gate = nn.Linear(self.hidden_size, self.num_experts, bias=False)
+        self.gate = nn.Linear(self.n_embed, self.n_experts, bias=False)
         self.experts = MoEExperts(config)
         self.shared_expert = None
         self.shared_expert_gate = None
         if self.shared_expert_dim:
             self.shared_expert = SharedExpertMLP(
-                hidden_size=self.hidden_size,
+                hidden_size=self.n_embed,
                 intermediate_size=self.shared_expert_dim,
             )
-            self.shared_expert_gate = nn.Linear(self.hidden_size, 1, bias=False)
+            self.shared_expert_gate = nn.Linear(self.n_embed, 1, bias=False)
 
     def forward(self, x):
         B, T, _ = x.shape
-        hidden = x.reshape(-1, self.hidden_size)
+        x_flat = x.reshape(-1, self.n_embed)
 
-        router_logits = F.linear(hidden, self.gate.weight)
+        router_logits = F.linear(x_flat, self.gate.weight)
         router_logits = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
         topk_weights, topk_indices = torch.topk(router_logits, self.top_k, dim=-1)
         topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-9)
         topk_weights = topk_weights.to(router_logits.dtype)
-        expert_out = self.experts(hidden, topk_indices, topk_weights)
+        expert_out = self.experts(x_flat, topk_indices, topk_weights)
 
         if self.shared_expert is not None and self.shared_expert_gate is not None:
-            shared_expert_out = self.shared_expert(hidden)
+            shared_expert_out = self.shared_expert(x_flat)
             shared_expert_out = torch.sigmoid(
-                self.shared_expert_gate(hidden)
+                self.shared_expert_gate(x_flat)
             ) * shared_expert_out
             expert_out = expert_out + shared_expert_out
 
-        return expert_out.view(B, T, self.hidden_size)
+        return expert_out.view(B, T, self.n_embed)
 
 
 class Block(nn.Module):
