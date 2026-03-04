@@ -14,7 +14,7 @@ except ImportError:
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 DEFAULT_MODELS = [
@@ -106,7 +106,7 @@ def _tiny_output(
 ) -> str:
     weights_path = snapshot_download(repo_id=model_name, cache_dir=".cache")
     device_map = {"": 0} if torch.cuda.is_available() else "auto"
-    model = Qwen3VL.from_pretrained(weights_path=weights_path, device_map=device_map)
+    model = Qwen3_5.from_pretrained(weights_path=weights_path, device_map=device_map)
     model.eval()
     processor = Processor.from_pretrained(model_name)
     messages = _messages(image_path=image_path, prompt=prompt)

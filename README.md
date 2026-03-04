@@ -74,12 +74,12 @@ python test/run_ultimate_compare.py \
 
 ## 📝 Code Examples
 
-Using the `Qwen3VL` class in code (the class name is kept for API compatibility):
+Using the `Qwen3_5` class in code:
 
 ```python
 from PIL import Image
 from huggingface_hub import snapshot_download
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 image = Image.open("test/data/test-img-1.jpg")
@@ -96,7 +96,7 @@ messages = [
 
 model_name = "Qwen/Qwen3.5-27B"
 weights = snapshot_download(repo_id=model_name, cache_dir=".cache")
-model = Qwen3VL.from_pretrained(weights_path=weights, device_map="auto")
+model = Qwen3_5.from_pretrained(weights_path=weights, device_map="auto")
 processor = Processor.from_pretrained(model_name)
 
 device = next(model.parameters()).device

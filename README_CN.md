@@ -39,12 +39,12 @@ python run.py
 
 ## 📝 代码示例
 
-使用 `Qwen3VL` 类（类名保留用于兼容）：
+使用 `Qwen3_5` 类：
 
 ```python
 from PIL import Image
 from huggingface_hub import snapshot_download
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 image = Image.open("test/data/test-img-1.jpg")
@@ -61,7 +61,7 @@ messages = [
 
 model_name = "Qwen/Qwen3.5-27B"
 weights = snapshot_download(repo_id=model_name, cache_dir=".cache")
-model = Qwen3VL.from_pretrained(weights_path=weights, device_map="auto")
+model = Qwen3_5.from_pretrained(weights_path=weights, device_map="auto")
 processor = Processor.from_pretrained(model_name)
 
 device = next(model.parameters()).device

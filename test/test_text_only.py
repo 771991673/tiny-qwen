@@ -13,7 +13,7 @@ from transformers import (
     Qwen3_5MoeForConditionalGeneration,
 )
 
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 DEFAULT_QUERY = "What is the purpose of filing your hand for rock climbing?"
@@ -39,7 +39,7 @@ def run_text_only_generation(
     )
 
     weights_path = snapshot_download(repo_id=model_name, cache_dir=".cache")
-    our_model = Qwen3VL.from_pretrained(weights_path=weights_path, device_map="auto")
+    our_model = Qwen3_5.from_pretrained(weights_path=weights_path, device_map="auto")
     our_model.eval()
     our_processor = Processor.from_pretrained(model_name)
 

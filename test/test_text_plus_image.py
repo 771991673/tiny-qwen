@@ -10,7 +10,7 @@ from huggingface_hub import snapshot_download
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 REFERENCE_JSON = Path("test/data/qwen35_transformers_mm_outputs.json")
@@ -79,7 +79,7 @@ def _generate_tiny_output(
     try:
         device_map = {"": 0} if torch.cuda.is_available() else "auto"
         weights_path = snapshot_download(repo_id=model_name, cache_dir=".cache")
-        model = Qwen3VL.from_pretrained(weights_path=weights_path, device_map=device_map)
+        model = Qwen3_5.from_pretrained(weights_path=weights_path, device_map=device_map)
         model.eval()
         processor = Processor.from_pretrained(model_name)
 

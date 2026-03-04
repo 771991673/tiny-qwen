@@ -18,7 +18,7 @@ os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 disable_progress_bars()
 
 from model.processor import Processor
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 
 ASCII_LOGO = """
 ██╗    ████████╗██╗███╗   ██╗██╗   ██╗    ██████╗ ██╗    ██╗███████╗███╗   ██╗
@@ -160,7 +160,7 @@ def main():
             try:
                 weights_path = snapshot_download(repo_id=hf_repo_id, cache_dir=".cache")
                 processor = Processor.from_pretrained(hf_repo_id)
-                model = Qwen3VL.from_pretrained(
+                model = Qwen3_5.from_pretrained(
                     weights_path=weights_path, device_map="auto"
                 )
                 model.eval()

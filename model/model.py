@@ -77,8 +77,6 @@ class RotaryEmbedding(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    """Full attention with output gating and partial RoPE (Qwen3.5)."""
-
     def __init__(self, config):
         super().__init__()
 
@@ -143,8 +141,6 @@ class SelfAttention(nn.Module):
 
 
 class GatedDeltaNet(nn.Module):
-    """Linear attention with gated delta rule (Qwen3.5)."""
-
     def __init__(self, config):
         super().__init__()
         self.n_k_heads = config.n_linear_k_heads
@@ -252,8 +248,6 @@ class RMSNorm(nn.Module):
 
 
 class GemmaRMSNorm(nn.Module):
-    """RMSNorm with (1 + weight) formulation, weight initialized to 0."""
-
     def __init__(self, n_embed, eps=1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.zeros(n_embed))
@@ -268,8 +262,6 @@ class GemmaRMSNorm(nn.Module):
 
 
 class RMSNormGated(nn.Module):
-    """RMSNorm followed by SiLU gating (for GatedDeltaNet output)."""
-
     def __init__(self, n_embed, eps=1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(n_embed))
@@ -313,7 +305,6 @@ class MoEExperts(nn.Module):
         self.hidden_size = config.n_embed
         self.expert_dim = config.n_moe_mlp
 
-        # Shapes are aligned with HF Qwen3.5-MoE checkpoints.
         self.gate_up_proj = nn.Parameter(
             torch.empty(self.num_experts, 2 * self.expert_dim, self.hidden_size)
         )
@@ -371,7 +362,6 @@ class MoEMLP(nn.Module):
         self.shared_expert = None
         self.shared_expert_gate = None
         if self.shared_expert_dim:
-            # Name must match HF checkpoint: mlp.shared_expert.{gate,up,down}_proj.weight
             self.shared_expert = SharedExpertMLP(
                 hidden_size=self.hidden_size,
                 intermediate_size=self.shared_expert_dim,
@@ -404,7 +394,6 @@ class Block(nn.Module):
         super().__init__()
         n_embed, eps = config.n_embed, config.rms_norm_eps
 
-        # Determine layer type
         layer_type = "full_attention"
         if config.layer_types is not None:
             layer_type = config.layer_types[layer_idx]
@@ -413,13 +402,11 @@ class Block(nn.Module):
         self.input_layernorm = GemmaRMSNorm(n_embed=n_embed, eps=eps)
         self.post_attention_layernorm = GemmaRMSNorm(n_embed=n_embed, eps=eps)
 
-        # Attention layer
         if layer_type == "linear_attention":
             self.linear_attn = GatedDeltaNet(config)
         else:
             self.self_attn = SelfAttention(config)
 
-        # MLP
         self.mlp = MoEMLP(config) if config.n_experts else DenseMLP(config)
 
     def forward(self, x, cos, sin):
@@ -460,7 +447,7 @@ class Model(nn.Module):
         return input_embed
 
 
-class Qwen3VL(nn.Module):
+class Qwen3_5(nn.Module):
     def __init__(
         self, config: ModelConfig, vision_config: Optional[VisionConfig] = None
     ):
