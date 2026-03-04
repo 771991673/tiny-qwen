@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import sys
 from pathlib import Path
 
@@ -64,14 +65,16 @@ def _transformers_output(
     processor = AutoProcessor.from_pretrained(model_name)
     messages = _messages(image_path=image_path, prompt=prompt)
 
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        enable_thinking=enable_thinking,
-        return_dict=True,
-        return_tensors="pt",
-    )
+    chat_template_kwargs = {
+        "tokenize": True,
+        "add_generation_prompt": True,
+        "return_dict": True,
+        "return_tensors": "pt",
+    }
+    if "enable_thinking" in inspect.signature(processor.apply_chat_template).parameters:
+        chat_template_kwargs["enable_thinking"] = enable_thinking
+
+    inputs = processor.apply_chat_template(messages, **chat_template_kwargs)
     inputs.pop("token_type_ids", None)
     inputs = inputs.to(model.device)
 
