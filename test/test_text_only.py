@@ -9,11 +9,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from huggingface_hub import snapshot_download
 from transformers import (
     AutoProcessor,
-    Qwen3VLForConditionalGeneration,
-    Qwen3VLMoeForConditionalGeneration,
+    Qwen3_5ForConditionalGeneration,
+    Qwen3_5MoeForConditionalGeneration,
 )
 
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 DEFAULT_QUERY = "What is the purpose of filing your hand for rock climbing?"
@@ -39,15 +39,15 @@ def run_text_only_generation(
     )
 
     weights_path = snapshot_download(repo_id=model_name, cache_dir=".cache")
-    our_model = Qwen3VL.from_pretrained(weights_path=weights_path, device_map="auto")
+    our_model = Qwen3_5.from_pretrained(weights_path=weights_path, device_map="auto")
     our_model.eval()
     our_processor = Processor.from_pretrained(model_name)
 
     hf_processor = AutoProcessor.from_pretrained(model_name)
     hf_model_cls = (
-        Qwen3VLMoeForConditionalGeneration
+        Qwen3_5MoeForConditionalGeneration
         if _is_moe_model(model_name)
-        else Qwen3VLForConditionalGeneration
+        else Qwen3_5ForConditionalGeneration
     )
     if requested_device.type == "cuda":
         hf_model = hf_model_cls.from_pretrained(

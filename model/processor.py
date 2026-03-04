@@ -66,6 +66,7 @@ class Processor:
         self,
         messages: List[dict],
         add_generation_prompt: bool = False,
+        enable_thinking: bool = True,
         device: Optional[torch.device] = None,
     ) -> dict:
         pixels_list = []
@@ -103,6 +104,10 @@ class Processor:
         # Add generation prompt if requested
         if add_generation_prompt:
             messages_str += "<|im_start|>assistant\n"
+            if enable_thinking:
+                messages_str += "<think>\n"
+            else:
+                messages_str += "<think>\n\n</think>\n\n"
 
         input_ids = self.tokenizer.encode(messages_str).ids
         input_ids = torch.tensor([input_ids], dtype=torch.long)

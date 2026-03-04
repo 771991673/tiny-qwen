@@ -18,7 +18,7 @@ os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 disable_progress_bars()
 
 from model.processor import Processor
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 
 ASCII_LOGO = """
 ██╗    ████████╗██╗███╗   ██╗██╗   ██╗    ██████╗ ██╗    ██╗███████╗███╗   ██╗
@@ -47,16 +47,12 @@ Use @relative/path/to/image.jpg to include images in your messages.
 """
 
 ALL_MODELS = [
-    "Qwen/Qwen3-VL-2B-Instruct",
-    "Qwen/Qwen3-VL-2B-Thinking",
-    "Qwen/Qwen3-VL-4B-Instruct",
-    "Qwen/Qwen3-VL-4B-Thinking",
-    "Qwen/Qwen3-VL-8B-Instruct",
-    "Qwen/Qwen3-VL-8B-Thinking",
-    "Qwen/Qwen3-VL-30B-A3B-Instruct",
-    "Qwen/Qwen3-VL-30B-A3B-Thinking",
-    "Qwen/Qwen3-VL-32B-Instruct",
-    "Qwen/Qwen3-VL-32B-Thinking",
+    "Qwen/Qwen3.5-0.8B",
+    "Qwen/Qwen3.5-2B",
+    "Qwen/Qwen3.5-4B",
+    "Qwen/Qwen3.5-9B",
+    "Qwen/Qwen3.5-27B",
+    "Qwen/Qwen3.5-35B-A3B",
 ]
 
 STYLE = Style(
@@ -164,7 +160,7 @@ def main():
             try:
                 weights_path = snapshot_download(repo_id=hf_repo_id, cache_dir=".cache")
                 processor = Processor.from_pretrained(hf_repo_id)
-                model = Qwen3VL.from_pretrained(
+                model = Qwen3_5.from_pretrained(
                     weights_path=weights_path, device_map="auto"
                 )
                 model.eval()
@@ -173,7 +169,7 @@ def main():
                 console.print(f"Failed to load model: {e}")
                 return
 
-        if not model or not processor:
+        if model is None or processor is None:
             console.print("Failed to initialize processor. Exiting...", style="red")
             return
 

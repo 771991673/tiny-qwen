@@ -1,158 +1,265 @@
 import argparse
+import json
 import sys
+from difflib import SequenceMatcher
 from pathlib import Path
 
+import pytest
 import torch
-from PIL import Image
+from huggingface_hub import snapshot_download
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from huggingface_hub import snapshot_download
-from transformers import (
-    AutoProcessor,
-    Qwen3VLForConditionalGeneration,
-    Qwen3VLMoeForConditionalGeneration,
-)
-
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
-DEFAULT_IMAGE_PATH = Path("test/data/test-img-1.jpg")
-DEFAULT_PROMPT = "what is in the image?"
+REFERENCE_JSON = Path("test/data/qwen35_transformers_mm_outputs.json")
+DEFAULT_MODELS = [
+    "Qwen/Qwen3.5-0.8B",
+    "Qwen/Qwen3.5-2B",
+    "Qwen/Qwen3.5-4B",
+    "Qwen/Qwen3.5-9B",
+    "Qwen/Qwen3.5-27B",
+    "Qwen/Qwen3.5-35B-A3B",
+]
 
 
-def _is_moe_model(model_name: str) -> bool:
-    return "A3B" in model_name
+def _get_stop_tokens(processor: Processor) -> list[int]:
+    tokens = []
+    for tok in ("<|im_end|>", "<|im_start|>", "<|endoftext|>", "<|eot_id|>"):
+        tok_id = processor.tokenizer.token_to_id(tok)
+        if tok_id is not None:
+            tokens.append(tok_id)
+    return sorted(set(tokens))
 
 
-def _move_to_device(batch: dict, device: torch.device) -> dict:
-    for key in ("input_ids", "pixels", "d_image", "pixel_values", "image_grid_thw"):
-        tensor = batch.get(key)
-        if tensor is not None and hasattr(tensor, "to"):
-            batch[key] = tensor.to(device)
-    return batch
+def _normalize_output(text: str) -> str:
+    text = text.strip()
+    if text.startswith("<think>\n\n</think>\n\n"):
+        text = text[len("<think>\n\n</think>\n\n") :]
+    if text.startswith("<think>\n"):
+        text = text[len("<think>\n") :]
+
+    # If generation spills into a new pseudo-turn, keep only assistant's first answer.
+    for marker in ("\nuser\n", "\n<|im_start|>user\n", "\nassistant\n"):
+        if marker in text:
+            text = text.split(marker, 1)[0]
+    return text.strip()
 
 
-def run_text_plus_image_generation(
+def _semantic_match(expected: str, actual: str, min_ratio: float) -> tuple[bool, float, bool]:
+    expected_norm = _normalize_output(expected).lower()
+    actual_norm = _normalize_output(actual).lower()
+    ratio = SequenceMatcher(a=actual_norm, b=expected_norm).ratio()
+
+    # We intentionally allow wording differences; enforce core visual facts instead.
+    core_ok = (
+        ("sunflower" in actual_norm)
+        and ("bee" in actual_norm)
+        and (("field" in actual_norm) or ("background" in actual_norm))
+    )
+    return (ratio >= min_ratio and core_ok), ratio, core_ok
+
+
+def _is_match(
+    expected: str, actual: str, match_mode: str, min_ratio: float
+) -> tuple[bool, float, bool]:
+    if match_mode == "exact":
+        return (_normalize_output(actual) == _normalize_output(expected)), 1.0, True
+    return _semantic_match(expected=expected, actual=actual, min_ratio=min_ratio)
+
+
+def _generate_tiny_output(
     model_name: str,
+    prompt: str,
+    image_path: str,
     max_new_tokens: int,
-    device: str = "cuda",
-    image_path: Path = DEFAULT_IMAGE_PATH,
-) -> dict:
-    requested_device = torch.device(
-        device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
-    )
+    enable_thinking: bool,
+) -> tuple[bool, str]:
+    try:
+        device_map = {"": 0} if torch.cuda.is_available() else "auto"
+        weights_path = snapshot_download(repo_id=model_name, cache_dir=".cache")
+        model = Qwen3_5.from_pretrained(weights_path=weights_path, device_map=device_map)
+        model.eval()
+        processor = Processor.from_pretrained(model_name)
 
-    weights_path = snapshot_download(repo_id=model_name, cache_dir=".cache")
-    our_model = Qwen3VL.from_pretrained(weights_path=weights_path, device_map="auto")
-    our_model.eval()
-    our_processor = Processor.from_pretrained(model_name)
-
-    hf_processor = AutoProcessor.from_pretrained(model_name)
-    hf_model_cls = (
-        Qwen3VLMoeForConditionalGeneration
-        if _is_moe_model(model_name)
-        else Qwen3VLForConditionalGeneration
-    )
-    if requested_device.type == "cuda":
-        hf_model = hf_model_cls.from_pretrained(
-            model_name, torch_dtype=torch.bfloat16, device_map="auto"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image_path},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        device = next(model.parameters()).device
+        inputs = processor(
+            messages,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+            device=device,
         )
-    else:
-        hf_model = hf_model_cls.from_pretrained(model_name)
-        hf_model.to(requested_device)
-    hf_model.eval()
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "url": str(image_path)},
-                {"type": "text", "text": DEFAULT_PROMPT},
-            ],
+        output_ids = model.generate(
+            input_ids=inputs["input_ids"],
+            pixels=inputs.get("pixels"),
+            d_image=inputs.get("d_image"),
+            max_new_tokens=max_new_tokens,
+            stop_tokens=_get_stop_tokens(processor),
+        )
+        prompt_len = inputs["input_ids"].shape[1]
+        continuation_ids = output_ids[0][prompt_len:].tolist()
+        return True, processor.tokenizer.decode(continuation_ids)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _load_reference(reference_json: Path) -> dict:
+    if not reference_json.exists():
+        raise FileNotFoundError(f"Missing reference JSON: {reference_json}")
+    return json.loads(reference_json.read_text())
+
+
+def run_reference_check(
+    reference_json: Path,
+    models: list[str] | None = None,
+    match_mode: str = "semantic",
+    min_ratio: float = 0.35,
+) -> list[dict]:
+    ref = _load_reference(reference_json)
+    requested_models = models or list(ref.get("outputs", {}).keys())
+
+    print(
+        "NOTE: This check uses semantic matching against Transformers reference output. "
+        "A token-identical match is not expected."
+    )
+
+    results = []
+    for model_name in requested_models:
+        expected = ref["outputs"].get(model_name)
+        if expected is None:
+            result = {
+                "model": model_name,
+                "loaded": False,
+                "match": False,
+                "ratio": 0.0,
+                "core_ok": False,
+                "expected": f"<missing in {reference_json}>",
+                "actual": "<not run>",
+            }
+            results.append(result)
+            continue
+
+        loaded, actual = _generate_tiny_output(
+            model_name=model_name,
+            prompt=ref["prompt"],
+            image_path=ref["image_path"],
+            max_new_tokens=int(ref["max_new_tokens"]),
+            enable_thinking=bool(ref.get("enable_thinking", True)),
+        )
+
+        match, ratio, core_ok = (False, 0.0, False)
+        if loaded:
+            match, ratio, core_ok = _is_match(
+                expected=expected,
+                actual=actual,
+                match_mode=match_mode,
+                min_ratio=min_ratio,
+            )
+
+        result = {
+            "model": model_name,
+            "loaded": loaded,
+            "match": match,
+            "ratio": ratio,
+            "core_ok": core_ok,
+            "expected": expected,
+            "actual": actual,
+            "normalized_expected": _normalize_output(expected),
+            "normalized_actual": _normalize_output(actual),
         }
-    ]
+        results.append(result)
 
-    our_inputs = our_processor(messages, add_generation_prompt=True)
-    our_inputs = _move_to_device(our_inputs, requested_device)
-    our_output_ids = our_model.generate(
-        input_ids=our_inputs["input_ids"],
-        pixels=our_inputs.get("pixels"),
-        d_image=our_inputs.get("d_image"),
-        max_new_tokens=max_new_tokens,
-    )
-    our_outputs = hf_processor.batch_decode(
-        our_output_ids,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )
+    for result in results:
+        print(f"\n[{result['model']}] loaded={result['loaded']}")
+        print(f"match={result['match']}")
+        print(
+            f"mode={match_mode} ratio={result['ratio']:.3f} core_ok={result['core_ok']}"
+        )
+        print(f"expected={result['expected']!r}")
+        print(f"actual={result['actual']!r}")
+        if "normalized_expected" in result:
+            print(f"normalized_expected={result['normalized_expected']!r}")
+            print(f"normalized_actual={result['normalized_actual']!r}")
 
-    image = Image.open(image_path)
-    hf_messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": DEFAULT_PROMPT},
-            ],
-        }
-    ]
-
-    hf_inputs = hf_processor.apply_chat_template(
-        hf_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
-    hf_inputs = _move_to_device(hf_inputs, requested_device)
-    hf_output_ids = hf_model.generate(
-        **hf_inputs,
-        max_new_tokens=max_new_tokens,
-    )
-    hf_outputs = hf_processor.batch_decode(
-        hf_output_ids,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )
-
-    return {"ours": our_outputs, "transformers": hf_outputs}
+    return results
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run text+image generation test.")
-    parser.add_argument("model_name", type=str, help="HuggingFace model identifier.")
-    parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=16,
-        help="Maximum number of tokens to generate.",
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Validate Tiny Qwen image outputs against a Transformers-generated "
+            "Qwen 3.5 reference JSON."
+        )
     )
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help="Device to run inference on (e.g., cuda or cpu).",
-    )
-    parser.add_argument(
-        "--image-path",
+        "--reference-json",
         type=Path,
-        default=DEFAULT_IMAGE_PATH,
-        help="Path to an image file to include in the prompt.",
+        default=REFERENCE_JSON,
+        help="Path to Transformers reference JSON.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--models",
+        nargs="*",
+        default=None,
+        help="Optional subset of model ids to evaluate.",
+    )
+    parser.add_argument(
+        "--match-mode",
+        choices=["semantic", "exact"],
+        default="semantic",
+        help="How to compare Tiny output to reference.",
+    )
+    parser.add_argument(
+        "--min-ratio",
+        type=float,
+        default=0.35,
+        help="Minimum SequenceMatcher ratio for semantic mode.",
+    )
+    return parser.parse_args()
 
-    outputs = run_text_plus_image_generation(
-        model_name=args.model_name,
-        max_new_tokens=args.max_new_tokens,
-        device=args.device,
-        image_path=args.image_path,
+
+@pytest.mark.parametrize("model_name", DEFAULT_MODELS)
+def test_text_plus_image_reference(model_name: str):
+    if not REFERENCE_JSON.exists():
+        pytest.skip(f"Missing reference JSON: {REFERENCE_JSON}")
+
+    results = run_reference_check(
+        reference_json=REFERENCE_JSON,
+        models=[model_name],
+        match_mode="semantic",
+        min_ratio=0.35,
     )
-    for idx, output in enumerate(outputs["ours"]):
-        print(f"[ours][text+image][{args.model_name}][sample-{idx}]: {output}")
-    for idx, output in enumerate(outputs["transformers"]):
-        print(f"[transformers][text+image][{args.model_name}][sample-{idx}]: {output}")
+    result = results[0]
+    assert result["loaded"], f"Model failed to load: {result['actual']}"
+    assert result["match"], (
+        f"Mismatch for {model_name}\n"
+        f"ratio={result['ratio']:.3f} core_ok={result['core_ok']}\n"
+        f"expected={result['expected']!r}\n"
+        f"actual={result['actual']!r}"
+    )
+
+
+def main() -> int:
+    args = _parse_args()
+    results = run_reference_check(
+        reference_json=args.reference_json,
+        models=args.models,
+        match_mode=args.match_mode,
+        min_ratio=args.min_ratio,
+    )
+    return 0 if all(r["match"] for r in results) else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

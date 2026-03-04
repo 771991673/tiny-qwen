@@ -8,7 +8,7 @@
 
 # ✨ Tiny Qwen
 
-一个简洁易读的 PyTorch 代码库，用于重写 `Qwen3-VL`，同时支持文本与视觉模态，并兼容稠密和混合专家架构。
+一个简洁易读的 PyTorch 代码库，用于重写 `Qwen3.5` 视觉语言模型，同时支持文本与视觉模态，并兼容稠密和混合专家架构。
 
 如果你觉得 Hugging Face 的代码难读，那你来对地方了
 
@@ -39,12 +39,12 @@ python run.py
 
 ## 📝 代码示例
 
-使用 `Qwen3VL` 类：
+使用 `Qwen3_5` 类：
 
 ```python
 from PIL import Image
 from huggingface_hub import snapshot_download
-from model.model import Qwen3VL
+from model.model import Qwen3_5
 from model.processor import Processor
 
 image = Image.open("test/data/test-img-1.jpg")
@@ -59,9 +59,9 @@ messages = [
     },
 ]
 
-model_name = "Qwen/Qwen3-VL-4B-Instruct"
+model_name = "Qwen/Qwen3.5-27B"
 weights = snapshot_download(repo_id=model_name, cache_dir=".cache")
-model = Qwen3VL.from_pretrained(weights_path=weights, device_map="auto")
+model = Qwen3_5.from_pretrained(weights_path=weights, device_map="auto")
 processor = Processor.from_pretrained(model_name)
 
 device = next(model.parameters()).device
