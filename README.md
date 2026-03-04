@@ -10,7 +10,7 @@
 
 A minimal, easy-to-read PyTorch re-implementation of `Qwen3.5` vision-language models. Supports text+vision as well as dense and mixture-of-experts variants.
 
-For `Qwen3-VL` implementation (former `main`), see [this branch](https://github.com/Emericen/tiny-qwen/tree/legacy/qwen3_vl).
+For `Qwen3-VL` implementation, see [this branch](https://github.com/Emericen/tiny-qwen/tree/legacy/qwen3_vl).
 
 For `Qwen3` (text-only) and `Qwen2.5 VL` support, see [this branch](https://github.com/Emericen/tiny-qwen/tree/legacy/qwen2_5).
 
