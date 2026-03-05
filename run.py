@@ -1,7 +1,11 @@
 import os
 import re
+import io
+import warnings
+import logging
 import torch
 import traceback
+from contextlib import redirect_stderr
 
 import typer
 from huggingface_hub import snapshot_download
@@ -14,6 +18,7 @@ from rich.text import Text
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_VERBOSITY"] = "error"
 os.environ["ACCELERATE_DISABLE_RICH"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 disable_progress_bars()
 
@@ -69,6 +74,25 @@ STYLE = Style(
 
 console = Console(highlight=False)
 app = typer.Typer(add_completion=False)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+warnings.filterwarnings(
+    "ignore", message=r"The safetensors archive passed at .* does not contain metadata.*"
+)
+warnings.filterwarnings(
+    "ignore", message=r"Some weights of the model checkpoint at .* were not used when initializing .*"
+)
+
+
+def resolve_stop_tokens(tokenizer):
+    # Qwen3.5 special tokens
+    token_names = ["<|im_end|>", "<|im_start|>", "<|endoftext|>"]
+    stop_tokens = []
+    for name in token_names:
+        token_id = tokenizer.token_to_id(name)
+        if token_id is not None:
+            stop_tokens.append(token_id)
+    return stop_tokens
 
 
 def parse_user_input(text):
@@ -105,9 +129,11 @@ def parse_user_input(text):
 
 def generate_local_response(messages, model, processor, max_tokens=2048):
     device = next(model.parameters()).device
-    inputs = processor(messages, add_generation_prompt=True, device=device)
+    inputs = processor(
+        messages, add_generation_prompt=True, enable_thinking=False, device=device
+    )
 
-    stop_tokens = [151645, 151644, 151643]  # <|im_end|>, <|im_start|>, <|endoftext|>
+    stop_tokens = resolve_stop_tokens(processor.tokenizer)
     generation_kwargs = {
         "input_ids": inputs["input_ids"],
         "max_new_tokens": max_tokens,
@@ -158,11 +184,12 @@ def main():
         hf_repo_id = selected_model_variant
         with console.status(f"[bold #face0a]Loading {hf_repo_id}...", spinner="dots"):
             try:
-                weights_path = snapshot_download(repo_id=hf_repo_id, cache_dir=".cache")
-                processor = Processor.from_pretrained(hf_repo_id)
-                model = Qwen3_5.from_pretrained(
-                    weights_path=weights_path, device_map="auto"
-                )
+                with redirect_stderr(io.StringIO()):
+                    weights_path = snapshot_download(repo_id=hf_repo_id, cache_dir=".cache")
+                    processor = Processor.from_pretrained(hf_repo_id)
+                    model = Qwen3_5.from_pretrained(
+                        weights_path=weights_path, device_map="auto"
+                    )
                 model.eval()
                 model = torch.compile(model)
             except Exception as e:

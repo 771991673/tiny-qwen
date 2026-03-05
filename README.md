@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    <img src="test/data/banner.png" alt="Tiny Qwen Interactive Chat" width="90%">
+    <img src="assets/banner.png" alt="Tiny Qwen Interactive Chat" width="90%">
 </p>
 
 ## ✨ Tiny Qwen

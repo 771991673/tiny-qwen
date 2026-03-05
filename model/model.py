@@ -641,7 +641,7 @@ class Qwen3_5(nn.Module):
     ):
         if stop_tokens is None:
             # <|im_end|>, <|im_start|>, <|endoftext|>
-            stop_tokens = [151645, 151644, 151643]
+            stop_tokens = [248046, 248045, 248044]
 
         self.eval()
         generated_ids = input_ids
