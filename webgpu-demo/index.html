@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qwen3.5-0.8B · WebGPU Demo</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0a0a0f; color: #e4e4e7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; }
+  .btn-primary { background: #2563eb; color: #fff; padding: 10px 24px; border-radius: 8px; font-weight: 500; }
+  .btn-primary:hover { background: #3b82f6; }
+  .btn-primary:disabled { background: #3f3f46; color: #71717a; cursor: not-allowed; }
+  #dropzone.drag-over { border-color: #3b82f6; background: rgba(59,130,246,0.08); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+  .running { animation: pulse 1s infinite; }
+  .log-line { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #a1a1aa; }
+</style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+<header class="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center text-xs font-bold">Qw</div>
+    <div><h1 class="text-lg font-semibold">Qwen3.5-0.8B · WebGPU</h1>
+      <p id="modelLabel" class="text-xs text-zinc-500">Initializing…</p></div>
+  </div>
+  <div class="flex items-center gap-3 text-sm">
+    <span class="w-2 h-2 rounded-full bg-yellow-500" id="statusDot"></span>
+    <span class="text-zinc-400" id="statusText">Loading</span>
+  </div>
+</header>
+
+<main class="flex-1 flex flex-col lg:flex-row gap-6 p-6 max-w-7xl mx-auto w-full">
+  <section class="lg:w-1/2 flex flex-col gap-4">
+    <div class="card p-6">
+      <h2 class="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">Image Input</h2>
+      <div id="dropzone" class="border-2 border-dashed border-zinc-700 rounded-xl p-8 text-center cursor-pointer hover:border-zinc-500">
+        <svg class="w-10 h-10 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+        </svg>
+        <p class="text-sm text-zinc-400">Drop an image or click to browse</p>
+        <input id="fileInput" type="file" accept="image/*" class="hidden">
+      </div>
+      <div id="previewContainer" class="hidden mt-3 rounded-xl overflow-hidden border border-zinc-800">
+        <img id="previewImg" class="w-full h-auto max-h-64 object-contain" alt="preview">
+      </div>
+      <div id="imageInfo" class="hidden mt-2 text-xs text-zinc-500"></div>
+    </div>
+
+    <button id="runBtn" disabled class="btn-primary"><span id="runBtnText">Load model first</span></button>
+
+    <div id="timing" class="hidden card p-3 text-sm text-zinc-500 flex items-center gap-4">
+      <span>⏱ <span id="inferTime">—</span> ms</span>
+      <span>📦 <span id="patchInfo">—</span></span>
+    </div>
+  </section>
+
+  <section class="lg:w-1/2 flex flex-col gap-4">
+    <div class="card p-4 flex-1">
+      <h2 class="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-2">Pipeline Log</h2>
+      <div id="log" class="h-48 overflow-y-auto space-y-0.5"></div>
+    </div>
+    <div class="card p-4 flex-1">
+      <h2 class="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-2">Feature Output</h2>
+      <div id="featureOutput" class="min-h-[100px] flex items-center justify-center">
+        <p class="text-zinc-600 text-sm">Run vision encoder to see features</p>
+      </div>
+      <div id="featureStats" class="hidden mt-2 text-xs text-zinc-500 space-y-1"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="border-t border-zinc-800 px-6 py-3 text-xs text-zinc-600 text-center">
+  Qwen3.5-0.8B VisionEncoder via WebGPU · <span id="weightInfo">Not loaded</span>
+</footer>
+
+<script type="module">
+import { WebGPURuntime, WGSL, align } from './net.js';
+
+// ─── State ───────────────────────────────────────────────────────────────
+const rt = new WebGPURuntime();
+let metadata = null;
+let imagePatches = null; // Float32Array of patchified image data
+let imageInfo_ = null;   // { fw, fh, numPatches }
+let isRunning = false;
+const weightData = await fetchWeightsBlocking();
+
+// DOM refs
+const $ = s => document.querySelector(s);
+const log = msg => { const d = document.createElement('div'); d.className = 'log-line'; d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`; $('#log').appendChild(d); $('#log').scrollTop = $('#log').scrollHeight; };
+
+function setStatus(text, ok) {
+  $('#statusText').textContent = text;
+  $('#statusDot').className = `w-2 h-2 rounded-full ${ok ? 'bg-green-500' : ok === false ? 'bg-red-500' : 'bg-yellow-500'}`;
+}
+
+
+// ─── Fetch weights (blocking init) ─────────────────────────────────────
+async function fetchWeightsBlocking() {
+  try {
+    setStatus('Loading metadata…');
+    const mr = await fetch('metadata.json');
+    metadata = await mr.json();
+    $('#modelLabel').textContent = `VisionEncoder · ${(metadata.weight_bytes/1024/1024).toFixed(0)} MB`;
+    log(`Metadata: ${metadata.weight_count} tensors`);
+
+    setStatus('Loading weights…');
+    const wr = await fetch('weights.bin');
+    const buf = await wr.arrayBuffer();
+    log(`Weights: ${(buf.byteLength/1024/1024).toFixed(1)} MB`);
+
+    setStatus('Init WebGPU…');
+    await rt.init();
+    log('WebGPU ready');
+
+    rt.loadWeights(buf);
+
+    // Build offset index
+    for (const w of metadata.weights) rt.weightOffset[w.name] = w;
+
+    setStatus('Ready', true);
+    $('#weightInfo').textContent = `Weights: ${(buf.byteLength/1024/1024).toFixed(1)} MB`;
+    log('✅ Ready');
+    return buf;
+  } catch(e) {
+    setStatus(`Error: ${e.message}`, false);
+    log(`❌ ${e.message}`);
+    return null;
+  }
+}
+
+
+// ─── Image processing ──────────────────────────────────────────────────
+function handleFile(file) {
+  if (!file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    $('#previewImg').src = e.target.result;
+    $('#previewContainer').classList.remove('hidden');
+    const img = new Image();
+    img.onload = () => processImage(img, file.name);
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function processImage(img, fileName) {
+  const vc = metadata.vision_config;
+  const PS = vc.patch_size;          // 16
+  const MS = vc.spatial_merge_size;  // 2
+  const FACTOR = PS * MS;            // 32
+  const TP = vc.temporal_patch_size; // 2
+  const C = vc.in_channels;           // 3
+
+  // Resize to multiple of FACTOR
+  let fw = Math.round(img.width / FACTOR) * FACTOR;
+  let fh = Math.round(img.height / FACTOR) * FACTOR;
+  const maxPx = 512 * 512;
+  if (fw * fh > maxPx) { const s = Math.sqrt(maxPx/(fw*fh)); fw = Math.max(FACTOR, Math.floor(fw*s/FACTOR)*FACTOR); fh = Math.max(FACTOR, Math.floor(fh*s/FACTOR)*FACTOR); }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = fw; canvas.height = fh;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, fw, fh);
+  const id = ctx.getImageData(0, 0, fw, fh);
+
+  // Normalize: (pixel/255 - 0.5) / 0.5 = pixel*2/255 - 1 → range [-1, 1]
+  const pixels = new Float32Array(3 * fh * fw);
+  for (let i = 0; i < fh * fw; i++) {
+    const v = id.data[i*4] / 255;
+    pixels[i] = v * 2 - 1;                    // R
+    pixels[fh*fw + i] = id.data[i*4+1]/255*2-1; // G
+    pixels[2*fh*fw + i] = id.data[i*4+2]/255*2-1; // B
+  }
+
+  // Raw patches (before spatial merge): grid_t * grid_h * grid_w
+  const gh = fh / PS;  // patches high
+  const gw = fw / PS;  // patches wide
+  const gt = 1;        // single image
+
+  // Each patch: C * TP * PS * PS = 3*2*16*16 = 1536
+  // For a single image, we replicate for temporal_patch_size=2
+  const patchDim = C * TP * PS * PS;
+  const numPixelsPerPatch = PS * PS;
+
+  // Pre-merge patch count: gh * gw (t=1 → TP=2 means we tile temporally)
+  const rawPatches = gt * gh * gw; // = 1 * gh * gw
+
+  // Create patches array in Qwen3.5 format:
+  // [grid_t, temp_patch, C, grid_h/merge, merge, PS, grid_w/merge, merge, PS]
+  // → transpose(0,3,6,4,7,2,1,5,8) 
+  // → flatten to [grid_t*grid_h*grid_w, C*TP*PS*PS]
+  const patches = new Float32Array(rawPatches * patchDim);
+
+  // Simpler layout: for each grid position (t, h, w), extract C*TP patches
+  // The merge_size=2 means we don't merge in this step; merger does it later
+  // For output, each (h,w) position has C*TP*PS*PS elements
+  // TP=2 means we tile temporal dimension twice (H and W from the same image)
+
+  let outIdx = 0;
+  for (let th = 0; th < gh; th++) {
+    for (let tw = 0; tw < gw; tw++) {
+      for (let tp = 0; tp < TP; tp++) { // temporal: duplicate for TP=2
+        for (let c = 0; c < C; c++) {
+          for (let py = 0; py < PS; py++) {
+            for (let px = 0; px < PS; px++) {
+              const imgY = th * PS + py;
+              const imgX = tw * PS + px;
+              let val;
+              if (tp === 0) {
+                val = pixels[c * fh * fw + imgY * fw + imgX];
+              } else {
+                val = pixels[c * fh * fw + imgY * fw + imgX]; // same image for t=1
+              }
+              patches[outIdx++] = val;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  imagePatches = patches;
+  imageInfo_ = { fw, fh, rawPatches, gh, gw, gt };
+
+  $('#imageInfo').textContent = `📷 ${fileName} · ${img.width}×${img.height} → ${fw}×${fh} · ${rawPatches} patches`;
+  $('#imageInfo').classList.remove('hidden');
+  log(`Image: ${fw}×${fh}, ${rawPatches} patches × ${patchDim} dims`);
+
+  $('#runBtn').disabled = false;
+  $('#runBtnText').textContent = 'Run Vision Encoder';
+}
+
+
+// ─── Vision Encoder Pipeline ───────────────────────────────────────────
+async function runVisionEncoder() {
+  if (isRunning || !imagePatches || !metadata) return;
+  isRunning = true;
+  $('#runBtn').disabled = true;
+  $('#runBtnText').textContent = 'Running…';
+  $('#runBtn').classList.add('running');
+  $('#timing').classList.remove('hidden');
+
+  const vc = metadata.vision_config;
+  const H = vc.hidden_size;          // 768
+  const NL = vc.num_layers;          // 12
+  const NH = vc.num_heads;           // 12
+  const HD = H / NH;                  // 64
+  const MLP = vc.intermediate_size;  // 3072
+  const OUT = vc.out_hidden_size;    // 1024
+  const PS = vc.patch_size;
+  const MS = vc.spatial_merge_size;
+  const TP = vc.temporal_patch_size;
+  const patchDim = vc.in_channels * TP * PS * PS;
+
+  const { rawPatches, gh, gw } = imageInfo_;
+  const N = rawPatches;
+  const Nout = (gh/MS) * (gw/MS); // after spatial merge
+  const mergedDim = H * MS * MS;   // 768 * 4 = 3072
+
+  const wb = weightData;
+  const wo = name => {
+    const w = rt.weightOffset[name];
+    if (!w) throw new Error(`Weight not found: ${name}`);
+    return w;
+  };
+
+    // Helper: create buffer from weight slice (converts float16 → float32)
+  const wbufF32 = (name, outD, inD) => {
+    const w = wo(name);
+    const f16 = new Uint16Array(wb, w.offset, w.size / 2);
+    const f32 = new Float32Array(f16.length);
+    for (let i = 0; i < f16.length; i++) f32[i] = f16ToF32(f16[i]);
+    // Transpose from [outD, inD] → [inD, outD] for matmul
+    if (outD && inD && f32.length === outD * inD) {
+      const t = new Float32Array(f32.length);
+      for (let o = 0; o < outD; o++)
+        for (let i = 0; i < inD; i++)
+          t[i * outD + o] = f32[o * inD + i];
+      return rt.buffer(t.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        new Uint8Array(t.buffer));
+    }
+    // No transpose needed (bias, etc.)
+    return rt.buffer(f32.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      new Uint8Array(f32.buffer));
+  };
+
+  // Helper: create bias buffer expanded to [rows, cols]
+  const biasBuf = (name, rows, cols) => {
+    const w = wo(name);
+    const f16 = new Uint16Array(wb, w.offset, cols);
+    const bias = new Float32Array(rows * cols);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) bias[r * cols + c] = f16ToF32(f16[c]);
+    }
+    return rt.buffer(bias.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      new Uint8Array(bias.buffer));
+  };
+
+  // Helper: dispatch matmul with proper workgroup count
+  const matmul = (a, b, c, M, N_, K_) => {
+    rt.dispatch(WGSL.matmul(M, N_, K_), [
+      { resource: a }, { resource: b }, { resource: c }
+    ], [Math.ceil(N_/16), Math.ceil(M/16)]);
+  };
+
+  // float16 → float32 conversion
+  function f16ToF32(h) {
+    const s = (h >> 15) & 1;
+    const e = (h >> 10) & 0x1f;
+    const m = h & 0x3ff;
+    if (e === 0) return (s ? -1 : 1) * Math.pow(2, -14) * (m / 1024);
+    if (e === 31) return m ? NaN : (s ? -Infinity : Infinity);
+    return (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + m / 1024);
+  }
+
+  const startTime = performance.now();
+
+  try {
+    // ── Buffers ──
+    const patchInputBuf = rt.buffer(imagePatches.byteLength,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      new Uint8Array(imagePatches.buffer));
+    const hidden = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const scratch1 = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE);
+    const scratch2 = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE);
+    const qkvBuf = rt.buffer(N * 3 * H * 4, GPUBufferUsage.STORAGE);
+    const mlpIn = rt.buffer(N * MLP * 4, GPUBufferUsage.STORAGE);
+    const mlpGate = rt.buffer(N * MLP * 4, GPUBufferUsage.STORAGE);
+    const attnOut = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE);
+    const mergedBuf = rt.buffer(Nout * OUT * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+
+    // ── Step 1: PatchEmbed (Conv3d → matmul) ──
+    log('Step 1/4: PatchEmbed');
+    // Weight: [768, 3, 2, 16, 16] = [768, 1536]. Transpose → [1536, 768] for matmul
+    const pwBuf = wbufF32('model.visual.patch_embed.proj.weight', H, patchDim);
+    const pbBuf = biasBuf('model.visual.patch_embed.proj.bias', N, H);
+
+    matmul(patchInputBuf, pwBuf, hidden, N, H, patchDim);
+    await rt.sync();
+
+    rt.dispatch(WGSL.add_inplace(N * H), [
+      { resource: pbBuf }, { resource: hidden }
+    ], [Math.ceil(N*H/256)]);
+    await rt.sync();
+    log(`  → hidden: ${N}×${H}`);
+
+    // ── Step 2: Add position embedding ──
+    log('Step 2/4: Position Embedding');
+    const posData = interpolatePosEmbed(wb, wo('model.visual.pos_embed.weight'), N, H, gh, gw, MS);
+    const posBuf = rt.buffer(posData.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      new Uint8Array(posData));
+    rt.dispatch(WGSL.add_inplace(N * H), [
+      { resource: posBuf }, { resource: hidden }
+    ], [Math.ceil(N*H/256)]);
+    await rt.sync();
+
+    // ── Step 3: 12× VisionBlocks ──
+    for (let layer = 0; layer < NL; layer++) {
+      log(`Step 3.${layer+1}/12: Layer ${layer}`);
+
+      // LayerNorm 1
+      const ln1w = wbufF32(`model.visual.blocks.${layer}.norm1.weight`);
+      const ln1b = wbufF32(`model.visual.blocks.${layer}.norm1.bias`);
+      rt.dispatch(WGSL.layernorm(N, H, 1e-6), [
+        { resource: hidden }, { resource: ln1w }, { resource: ln1b }, { resource: scratch1 }
+      ], [N]);  // each workgroup processes 1 row
+      await rt.sync();
+
+      // QKV: [N, 768] @ [2304, 768]^T → [N, 2304]. Weight stored as [2304, 768].
+      const qkvw = wbufF32(`model.visual.blocks.${layer}.attn.qkv.weight`, 3*H, H);
+      matmul(scratch1, qkvw, qkvBuf, N, 3*H, H);
+      await rt.sync();
+
+      // QKV bias (broadcast over rows)
+      const qkvbBuf = biasBuf(`model.visual.blocks.${layer}.attn.qkv.bias`, N, 3*H);
+      rt.dispatch(WGSL.bias_add(N * 3 * H, 3 * H), [
+        { resource: qkvbBuf }, { resource: qkvBuf }
+      ], [Math.ceil(N*3*H/256)]);
+      await rt.sync();
+
+      // Split QKV: qkv [N, 3*H] → reshape to [N, 3, NH, HD], extract Q [N, H], K [N, H], V [N, H]
+      // We need to read-modify-write. For now, use a copy approach.
+      // Buffer layout: qkv[N, 0*H : 1*H] = Q, qkv[N, 1*H : 2*H] = K, qkv[N, 2*H : 3*H] = V
+      // These are in [N, NH, HD] layout naturally since reshape is [N, 3, NH, HD]
+      
+      // Extract Q, K, V by copying contiguous sections
+      // Q starts at qkvOffset = 0, length N*H
+      // K starts at qkvOffset = N*H, length N*H  
+      // V starts at qkvOffset = 2*N*H, length N*H
+      
+      // Use separate buffers for Q, K, V (each [N, H])
+      const qBuf = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+      const kBuf = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+      const vBuf = rt.buffer(N * H * 4, GPUBufferUsage.STORAGE);
+      
+      // Copy Q: for each position i in [N, H], copy qkv[i] → q[i]
+      // Since WGSL arrays are flat, qkv at offset 0 maps 1:1 for first N*H elements
+      // Use add_inplace trick: q = 0 + first N*H elements of qkv
+      // Simpler: create a shader to copy directly with offset
+      rt.dispatch(WGSL.copy(N * H), [
+        { resource: qkvBuf }, { resource: qBuf }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+      
+      // For K and V, we need offset copies. Use a simple offset copy shader.
+      // For now, we skip RoPE (no position info available in browser yet)
+      // and use the attention shader directly on Q, K, V.
+      // In production, apply WGSL.rope_seq(Q, freqs) and WGSL.rope_seq(K, freqs) here.
+      
+      // For K: copy from qkv offset N*H
+      // We need to create a temporary buffer with just the K portion
+      // Hack: use a shader that reads from qkv starting at N*H and writes to kBuf
+      // Simpler approach: just use the raw qkvBuf with appropriate offsets in attention
+      // For now, create K and V using an offset copy approach
+      
+      // Use a simple copy-with-offset approach: 
+      // For each i in [0, N*H): k[i] = qkv[N*H + i]
+      // Implemented via a small WGSL snippet
+      const copyOffsetWGSL = (n, offset) => `
+@group(0) @binding(0) var<storage, read> src: array<f32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@compute @workgroup_size(256, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x; if (i >= ${n}u) { return; }
+    dst[i] = src[${offset}u + i];
+}`;
+      
+      rt.dispatch(copyOffsetWGSL(N * H, N * H), [
+        { resource: qkvBuf }, { resource: kBuf }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+      
+      rt.dispatch(copyOffsetWGSL(N * H, 2 * N * H), [
+        { resource: qkvBuf }, { resource: vBuf }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+      
+      // VisionAttention with cu_seqlens
+      // cu_seqlens: for single image, [0, N]
+      const cuArr = new Uint32Array([0, N]);
+      const cuBuf = rt.buffer(2 * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 
+        new Uint8Array(cuArr.buffer));
+      
+      rt.dispatch(WGSL.vision_attention(N, NH, HD), [
+        { resource: qBuf }, { resource: kBuf }, { resource: vBuf },
+        { resource: cuBuf }, { resource: attnOut }
+      ], [Math.ceil(N * NH * HD / 64)]);
+      await rt.sync();
+
+      // Output projection
+      const ow = wbufF32(`model.visual.blocks.${layer}.attn.proj.weight`, H, H);
+      const obBuf2 = biasBuf(`model.visual.blocks.${layer}.attn.proj.bias`, N, H);
+      const scratch_proj = scratch2;
+      matmul(attnOut, ow, scratch_proj, N, H, H);
+      await rt.sync();
+
+      rt.dispatch(WGSL.bias_add(N * H, H), [
+        { resource: obBuf2 }, { resource: scratch_proj }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+
+      // Residual: hidden += proj_out
+      rt.dispatch(WGSL.add_inplace(N * H), [
+        { resource: scratch_proj }, { resource: hidden }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+
+      // LayerNorm 2
+      const ln2w = wbufF32(`model.visual.blocks.${layer}.norm2.weight`);
+      const ln2b = wbufF32(`model.visual.blocks.${layer}.norm2.bias`);
+      rt.dispatch(WGSL.layernorm(N, H, 1e-6), [
+        { resource: hidden }, { resource: ln2w }, { resource: ln2b }, { resource: scratch1 }
+      ], [N]);  // each workgroup processes 1 row
+      await rt.sync();
+
+      // MLP: fc1 → GELU → fc2
+      const fc1w = wbufF32(`model.visual.blocks.${layer}.mlp.linear_fc1.weight`, MLP, H);
+      matmul(scratch1, fc1w, mlpIn, N, MLP, H);
+      await rt.sync();
+
+      const fc1bBuf = biasBuf(`model.visual.blocks.${layer}.mlp.linear_fc1.bias`, N, MLP);
+      rt.dispatch(WGSL.bias_add(N * MLP, MLP), [
+        { resource: fc1bBuf }, { resource: mlpIn }
+      ], [Math.ceil(N*MLP/256)]);
+      await rt.sync();
+
+      // GELU (with numerical stability)
+      rt.dispatch(WGSL.gelu(N * MLP), [
+        { resource: mlpIn }, { resource: mlpGate }
+      ], [Math.ceil(N*MLP/256)]);
+      await rt.sync();
+
+      // fc2
+      const fc2w = wbufF32(`model.visual.blocks.${layer}.mlp.linear_fc2.weight`, H, MLP);
+      matmul(mlpGate, fc2w, scratch2, N, H, MLP);
+      await rt.sync();
+
+      const fc2bBuf = biasBuf(`model.visual.blocks.${layer}.mlp.linear_fc2.bias`, N, H);
+      rt.dispatch(WGSL.bias_add(N * H, H), [
+        { resource: fc2bBuf }, { resource: scratch2 }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+
+      // Residual: hidden += mlp_out
+      rt.dispatch(WGSL.add_inplace(N * H), [
+        { resource: scratch2 }, { resource: hidden }
+      ], [Math.ceil(N*H/256)]);
+      await rt.sync();
+    }
+
+    // ── Step 4: PatchMerger ──
+    log('Step 4/4: PatchMerger');
+    // After 12 transformer layers: [N, 768]
+    // Spatially: [gt, gh, gw, 768] where gh = fh/16, gw = fw/16
+    // Merger norm: [N, 768]
+    const mNormW = wbufF32('model.visual.merger.norm.weight');
+    const mNormB = wbufF32('model.visual.merger.norm.bias');
+    rt.dispatch(WGSL.layernorm(N, H, 1e-6), [
+      { resource: hidden }, { resource: mNormW }, { resource: mNormB }, { resource: scratch1 }
+    ], [N]);  // each workgroup processes 1 row
+    await rt.sync();
+
+    // Spatial merge (2x2): reshape [gt, gh, gw, H] → [gt, gh/MS, MS, gw/MS, MS, H]
+    // → transpose → flatten → [gt * (gh/MS) * (gw/MS), H*MS*MS]
+    // For gt=1: [Nout, 3072]
+    // In JS: create new buffer with merged layout
+    const hiddenData = await rt.readBuffer(hidden.buf, N * H * 4);
+    const hiddenF32 = new Float32Array(hiddenData.buffer);
+
+    // Perform spatial merge on CPU (simplest for now)
+    const mergedData = new Float32Array(Nout * mergedDim);
+    let mi = 0;
+    for (let mh = 0; mh < gh; mh += MS) {
+      for (let mw = 0; mw < gw; mw += MS) {
+        for (let dy = 0; dy < MS; dy++) {
+          for (let dx = 0; dx < MS; dx++) {
+            const srcIdx = (mh + dy) * gw + (mw + dx);
+            for (let d = 0; d < H; d++) {
+              mergedData[mi * mergedDim + (dy * MS + dx) * H + d] = hiddenF32[srcIdx * H + d];
+            }
+          }
+        }
+        mi++;
+      }
+    }
+
+    const mergedInputBuf = rt.buffer(mergedData.byteLength,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      new Uint8Array(mergedData.buffer));
+
+    // fc1: [Nout, 3072] @ [3072, 3072]^T → [Nout, 3072]
+    const fc1mW = wbufF32('model.visual.merger.linear_fc1.weight', mergedDim, mergedDim);
+    const fc1mBBuf = biasBuf('model.visual.merger.linear_fc1.bias', Nout, mergedDim);
+    matmul(mergedInputBuf, fc1mW, mlpIn, Nout, mergedDim, mergedDim);
+    await rt.sync();
+
+    rt.dispatch(WGSL.add_inplace(Nout * mergedDim), [
+      { resource: fc1mBBuf }, { resource: mlpIn }
+    ], [Math.ceil(Nout*mergedDim/256)]);
+    await rt.sync();
+
+    // GELU
+    rt.dispatch(WGSL.gelu(Nout * mergedDim), [
+      { resource: mlpIn }, { resource: scratch1 }
+    ], [Math.ceil(Nout*mergedDim/256)]);
+    await rt.sync();
+
+    // fc2: [Nout, 3072] @ [1024, 3072]^T → [Nout, 1024]
+    const fc2mW = wbufF32('model.visual.merger.linear_fc2.weight', OUT, mergedDim);
+    const fc2mBBuf = biasBuf('model.visual.merger.linear_fc2.bias', Nout, OUT);
+    matmul(scratch1, fc2mW, mergedBuf, Nout, OUT, mergedDim);
+    await rt.sync();
+
+    rt.dispatch(WGSL.add_inplace(Nout * OUT), [
+      { resource: fc2mBBuf }, { resource: mergedBuf }
+    ], [Math.ceil(Nout*OUT/256)]);
+    await rt.sync();
+
+    // ── Read results ──
+    await rt.sync();
+    const elapsed = performance.now() - startTime;
+    $('#inferTime').textContent = elapsed.toFixed(0);
+    $('#patchInfo').textContent = `${N} patches → ${Nout} features × ${OUT}`;
+
+    const outData = await rt.readBuffer(mergedBuf.buf, Nout * OUT * 4);
+    const outF32 = new Float32Array(outData.buffer);
+
+    // Statistics
+    let s=0, sq=0, mn=Infinity, mx=-Infinity;
+    for (const v of outF32) { s+=v; sq+=v*v; mn=Math.min(mn,v); mx=Math.max(mx,v); }
+    const mean = s/outF32.length;
+    const std = Math.sqrt(Math.max(0, sq/outF32.length - mean*mean));
+
+    // Visualize: per-feature bar chart
+    const featCanvas = document.createElement('canvas');
+    featCanvas.width = Nout;
+    featCanvas.height = 96;
+    const fctx = featCanvas.getContext('2d');
+    fctx.fillStyle = '#18181b';
+    fctx.fillRect(0, 0, featCanvas.width, featCanvas.height);
+
+    for (let p = 0; p < Nout; p++) {
+      let ps = 0;
+      for (let d = 0; d < OUT; d++) ps += outF32[p * OUT + d];
+      const pm = ps / OUT;
+      const bh = Math.abs(pm) * 20;
+      const y = pm >= 0 ? 96 - bh : 96;
+      fctx.fillStyle = pm >= 0 ? '#2563eb' : '#ef4444';
+      fctx.fillRect(p, y, 1, Math.max(1, bh));
+    }
+
+    const fo = $('#featureOutput');
+    fo.innerHTML = '';
+    fo.appendChild(featCanvas);
+
+    $('#featureStats').classList.remove('hidden');
+    $('#featureStats').innerHTML = `
+      <div>📊 ${Nout} vision features × ${OUT} dims</div>
+      <div>μ=${mean.toExponential(3)} σ=${std.toExponential(3)} · [${mn.toExponential(2)}, ${mx.toExponential(2)}]</div>
+    `;
+
+    log(`✅ Vision encoder done: ${elapsed.toFixed(0)}ms`);
+
+  } catch(err) {
+    console.error(err);
+    log(`❌ Error: ${err.message}`);
+    setStatus('Error', false);
+  } finally {
+    isRunning = false;
+    $('#runBtn').disabled = false;
+    $('#runBtnText').textContent = 'Run Vision Encoder';
+    $('#runBtn').classList.remove('running');
+  }
+}
+
+
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+function interpolatePosEmbed(wb, meta, N, H, gh, gw, MS) {
+  // Position embedding interpolation from learned [2304, 768] to current [N, 768]
+  const gridPerSide = Math.sqrt(meta.shape[0]); // sqrt(2304) = 48
+  const f16 = new Uint16Array(wb, meta.offset, meta.shape[0] * meta.shape[1]);
+  const posData = new Float32Array(f16.length);
+  for (let i = 0; i < f16.length; i++) posData[i] = f16ToF32(f16[i]);
+  const out = new Float32Array(N * H);
+
+  for (let th = 0; th < gh; th++) {
+    for (let tw = 0; tw < gw; tw++) {
+      const idx = th * gw + tw;
+      const fracH = th / (gh - 1 || 1);
+      const fracW = tw / (gw - 1 || 1);
+      const ph = fracH * (gridPerSide - 1);
+      const pw = fracW * (gridPerSide - 1);
+      const hL = Math.floor(ph), hH = Math.min(hL + 1, gridPerSide - 1);
+      const wL = Math.floor(pw), wH = Math.min(wL + 1, gridPerSide - 1);
+      const dh = ph - hL, dw = pw - wL;
+
+      const i00 = (hL * gridPerSide + wL) * H;
+      const i01 = (hL * gridPerSide + wH) * H;
+      const i10 = (hH * gridPerSide + wL) * H;
+      const i11 = (hH * gridPerSide + wH) * H;
+
+      const tRepeat = 2; // temporal_patch_size
+      for (let t = 0; t < tRepeat; t++) {
+        const outIdx = (idx * tRepeat + t) * H;
+        for (let d = 0; d < H; d++) {
+          const v00 = posData[i00 + d], v01 = posData[i01 + d];
+          const v10 = posData[i10 + d], v11 = posData[i11 + d];
+          const v0 = v00 * (1-dw) + v01 * dw;
+          const v1 = v10 * (1-dw) + v11 * dw;
+          out[outIdx + d] = v0 * (1-dh) + v1 * dh;
+        }
+      }
+    }
+  }
+  return out.buffer;
+}
+
+async function readMean(rt, buf, totalSize, rows, cols, offset) {
+  // Read buffer and compute mean of V portion (offset columns per row)
+  const data = await rt.readBuffer(buf, totalSize * 4);
+  const f32 = new Float32Array(data.buffer);
+  const mean = new Float32Array(cols);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      mean[c] += f32[r * (3 * cols) + offset + c];
+    }
+  }
+  for (let c = 0; c < cols; c++) mean[c] /= rows;
+  // Expand back to all rows
+  const out = new Float32Array(rows * cols);
+  for (let r = 0; r < rows; r++) out.set(mean, r * cols);
+  return out.buffer;
+}
+
+
+// ─── Event handlers ────────────────────────────────────────────────────
+$('#dropzone').addEventListener('click', () => $('#fileInput').click());
+$('#dropzone').addEventListener('dragover', e => { e.preventDefault(); $('#dropzone').classList.add('drag-over'); });
+$('#dropzone').addEventListener('dragleave', () => $('#dropzone').classList.remove('drag-over'));
+$('#dropzone').addEventListener('drop', e => {
+  e.preventDefault();
+  $('#dropzone').classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+$('#fileInput').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+$('#runBtn').addEventListener('click', runVisionEncoder);
+
+log('Demo loaded. Drop an image to start.');
+</script>
+</body>
+</html>

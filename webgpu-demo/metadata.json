@@ -1,0 +1,1460 @@
+{
+  "model_name": "Qwen3.5-0.8B-Vision",
+  "model_type": "vision",
+  "description": "Qwen3.5-0.8B VisionEncoder (image understanding)",
+  "weight_count": 153,
+  "weight_bytes": 201185792,
+  "use_fp16": true,
+  "weights": [
+    {
+      "name": "model.visual.blocks.0.attn.proj.bias",
+      "offset": 0,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.attn.proj.weight",
+      "offset": 1536,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.attn.qkv.bias",
+      "offset": 1181184,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.attn.qkv.weight",
+      "offset": 1185792,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.mlp.linear_fc1.bias",
+      "offset": 4724736,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.mlp.linear_fc1.weight",
+      "offset": 4730880,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.mlp.linear_fc2.bias",
+      "offset": 9449472,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.mlp.linear_fc2.weight",
+      "offset": 9451008,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.norm1.bias",
+      "offset": 14169600,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.norm1.weight",
+      "offset": 14171136,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.norm2.bias",
+      "offset": 14172672,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.0.norm2.weight",
+      "offset": 14174208,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.attn.proj.bias",
+      "offset": 14175744,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.attn.proj.weight",
+      "offset": 14177280,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.attn.qkv.bias",
+      "offset": 15356928,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.attn.qkv.weight",
+      "offset": 15361536,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.mlp.linear_fc1.bias",
+      "offset": 18900480,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.mlp.linear_fc1.weight",
+      "offset": 18906624,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.mlp.linear_fc2.bias",
+      "offset": 23625216,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.mlp.linear_fc2.weight",
+      "offset": 23626752,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.norm1.bias",
+      "offset": 28345344,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.norm1.weight",
+      "offset": 28346880,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.norm2.bias",
+      "offset": 28348416,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.1.norm2.weight",
+      "offset": 28349952,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.attn.proj.bias",
+      "offset": 28351488,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.attn.proj.weight",
+      "offset": 28353024,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.attn.qkv.bias",
+      "offset": 29532672,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.attn.qkv.weight",
+      "offset": 29537280,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.mlp.linear_fc1.bias",
+      "offset": 33076224,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.mlp.linear_fc1.weight",
+      "offset": 33082368,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.mlp.linear_fc2.bias",
+      "offset": 37800960,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.mlp.linear_fc2.weight",
+      "offset": 37802496,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.norm1.bias",
+      "offset": 42521088,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.norm1.weight",
+      "offset": 42522624,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.norm2.bias",
+      "offset": 42524160,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.10.norm2.weight",
+      "offset": 42525696,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.attn.proj.bias",
+      "offset": 42527232,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.attn.proj.weight",
+      "offset": 42528768,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.attn.qkv.bias",
+      "offset": 43708416,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.attn.qkv.weight",
+      "offset": 43713024,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.mlp.linear_fc1.bias",
+      "offset": 47251968,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.mlp.linear_fc1.weight",
+      "offset": 47258112,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.mlp.linear_fc2.bias",
+      "offset": 51976704,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.mlp.linear_fc2.weight",
+      "offset": 51978240,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.norm1.bias",
+      "offset": 56696832,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.norm1.weight",
+      "offset": 56698368,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.norm2.bias",
+      "offset": 56699904,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.11.norm2.weight",
+      "offset": 56701440,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.attn.proj.bias",
+      "offset": 56702976,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.attn.proj.weight",
+      "offset": 56704512,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.attn.qkv.bias",
+      "offset": 57884160,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.attn.qkv.weight",
+      "offset": 57888768,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.mlp.linear_fc1.bias",
+      "offset": 61427712,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.mlp.linear_fc1.weight",
+      "offset": 61433856,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.mlp.linear_fc2.bias",
+      "offset": 66152448,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.mlp.linear_fc2.weight",
+      "offset": 66153984,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.norm1.bias",
+      "offset": 70872576,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.norm1.weight",
+      "offset": 70874112,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.norm2.bias",
+      "offset": 70875648,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.2.norm2.weight",
+      "offset": 70877184,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.attn.proj.bias",
+      "offset": 70878720,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.attn.proj.weight",
+      "offset": 70880256,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.attn.qkv.bias",
+      "offset": 72059904,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.attn.qkv.weight",
+      "offset": 72064512,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.mlp.linear_fc1.bias",
+      "offset": 75603456,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.mlp.linear_fc1.weight",
+      "offset": 75609600,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.mlp.linear_fc2.bias",
+      "offset": 80328192,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.mlp.linear_fc2.weight",
+      "offset": 80329728,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.norm1.bias",
+      "offset": 85048320,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.norm1.weight",
+      "offset": 85049856,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.norm2.bias",
+      "offset": 85051392,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.3.norm2.weight",
+      "offset": 85052928,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.attn.proj.bias",
+      "offset": 85054464,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.attn.proj.weight",
+      "offset": 85056000,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.attn.qkv.bias",
+      "offset": 86235648,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.attn.qkv.weight",
+      "offset": 86240256,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.mlp.linear_fc1.bias",
+      "offset": 89779200,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.mlp.linear_fc1.weight",
+      "offset": 89785344,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.mlp.linear_fc2.bias",
+      "offset": 94503936,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.mlp.linear_fc2.weight",
+      "offset": 94505472,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.norm1.bias",
+      "offset": 99224064,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.norm1.weight",
+      "offset": 99225600,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.norm2.bias",
+      "offset": 99227136,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.4.norm2.weight",
+      "offset": 99228672,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.attn.proj.bias",
+      "offset": 99230208,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.attn.proj.weight",
+      "offset": 99231744,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.attn.qkv.bias",
+      "offset": 100411392,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.attn.qkv.weight",
+      "offset": 100416000,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.mlp.linear_fc1.bias",
+      "offset": 103954944,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.mlp.linear_fc1.weight",
+      "offset": 103961088,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.mlp.linear_fc2.bias",
+      "offset": 108679680,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.mlp.linear_fc2.weight",
+      "offset": 108681216,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.norm1.bias",
+      "offset": 113399808,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.norm1.weight",
+      "offset": 113401344,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.norm2.bias",
+      "offset": 113402880,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.5.norm2.weight",
+      "offset": 113404416,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.attn.proj.bias",
+      "offset": 113405952,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.attn.proj.weight",
+      "offset": 113407488,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.attn.qkv.bias",
+      "offset": 114587136,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.attn.qkv.weight",
+      "offset": 114591744,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.mlp.linear_fc1.bias",
+      "offset": 118130688,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.mlp.linear_fc1.weight",
+      "offset": 118136832,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.mlp.linear_fc2.bias",
+      "offset": 122855424,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.mlp.linear_fc2.weight",
+      "offset": 122856960,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.norm1.bias",
+      "offset": 127575552,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.norm1.weight",
+      "offset": 127577088,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.norm2.bias",
+      "offset": 127578624,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.6.norm2.weight",
+      "offset": 127580160,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.attn.proj.bias",
+      "offset": 127581696,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.attn.proj.weight",
+      "offset": 127583232,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.attn.qkv.bias",
+      "offset": 128762880,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.attn.qkv.weight",
+      "offset": 128767488,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.mlp.linear_fc1.bias",
+      "offset": 132306432,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.mlp.linear_fc1.weight",
+      "offset": 132312576,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.mlp.linear_fc2.bias",
+      "offset": 137031168,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.mlp.linear_fc2.weight",
+      "offset": 137032704,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.norm1.bias",
+      "offset": 141751296,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.norm1.weight",
+      "offset": 141752832,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.norm2.bias",
+      "offset": 141754368,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.7.norm2.weight",
+      "offset": 141755904,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.attn.proj.bias",
+      "offset": 141757440,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.attn.proj.weight",
+      "offset": 141758976,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.attn.qkv.bias",
+      "offset": 142938624,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.attn.qkv.weight",
+      "offset": 142943232,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.mlp.linear_fc1.bias",
+      "offset": 146482176,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.mlp.linear_fc1.weight",
+      "offset": 146488320,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.mlp.linear_fc2.bias",
+      "offset": 151206912,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.mlp.linear_fc2.weight",
+      "offset": 151208448,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.norm1.bias",
+      "offset": 155927040,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.norm1.weight",
+      "offset": 155928576,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.norm2.bias",
+      "offset": 155930112,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.8.norm2.weight",
+      "offset": 155931648,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.attn.proj.bias",
+      "offset": 155933184,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.attn.proj.weight",
+      "offset": 155934720,
+      "size": 1179648,
+      "shape": [
+        768,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.attn.qkv.bias",
+      "offset": 157114368,
+      "size": 4608,
+      "shape": [
+        2304
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.attn.qkv.weight",
+      "offset": 157118976,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.mlp.linear_fc1.bias",
+      "offset": 160657920,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.mlp.linear_fc1.weight",
+      "offset": 160664064,
+      "size": 4718592,
+      "shape": [
+        3072,
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.mlp.linear_fc2.bias",
+      "offset": 165382656,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.mlp.linear_fc2.weight",
+      "offset": 165384192,
+      "size": 4718592,
+      "shape": [
+        768,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.norm1.bias",
+      "offset": 170102784,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.norm1.weight",
+      "offset": 170104320,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.norm2.bias",
+      "offset": 170105856,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.blocks.9.norm2.weight",
+      "offset": 170107392,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.merger.linear_fc1.bias",
+      "offset": 170108928,
+      "size": 6144,
+      "shape": [
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.merger.linear_fc1.weight",
+      "offset": 170115072,
+      "size": 18874368,
+      "shape": [
+        3072,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.merger.linear_fc2.bias",
+      "offset": 188989440,
+      "size": 2048,
+      "shape": [
+        1024
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.merger.linear_fc2.weight",
+      "offset": 188991488,
+      "size": 6291456,
+      "shape": [
+        1024,
+        3072
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.merger.norm.bias",
+      "offset": 195282944,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.merger.norm.weight",
+      "offset": 195284480,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.patch_embed.proj.bias",
+      "offset": 195286016,
+      "size": 1536,
+      "shape": [
+        768
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.patch_embed.proj.weight",
+      "offset": 195287552,
+      "size": 2359296,
+      "shape": [
+        768,
+        3,
+        2,
+        16,
+        16
+      ],
+      "dtype": "float16"
+    },
+    {
+      "name": "model.visual.pos_embed.weight",
+      "offset": 197646848,
+      "size": 3538944,
+      "shape": [
+        2304,
+        768
+      ],
+      "dtype": "float16"
+    }
+  ],
+  "vision_config": {
+    "hidden_size": 768,
+    "num_heads": 12,
+    "num_layers": 12,
+    "intermediate_size": 3072,
+    "out_hidden_size": 1024,
+    "patch_size": 16,
+    "temporal_patch_size": 2,
+    "spatial_merge_size": 2,
+    "num_position_embeddings": 2304,
+    "in_channels": 3
+  },
+  "text_config": {
+    "hidden_size": 1024,
+    "vocab_size": 248320,
+    "head_dim": 256,
+    "rms_norm_eps": 1e-06
+  }
+}
