@@ -84,7 +84,6 @@ let metadata = null;
 let imagePatches = null; // Float32Array of patchified image data
 let imageInfo_ = null;   // { fw, fh, numPatches }
 let isRunning = false;
-const weightData = await fetchWeightsBlocking();
 
 // DOM refs
 const $ = s => document.querySelector(s);
@@ -93,6 +92,16 @@ const log = msg => { const d = document.createElement('div'); d.className = 'log
 function setStatus(text, ok) {
   $('#statusText').textContent = text;
   $('#statusDot').className = `w-2 h-2 rounded-full ${ok ? 'bg-green-500' : ok === false ? 'bg-red-500' : 'bg-yellow-500'}`;
+}
+
+// float16 → float32 conversion
+function f16ToF32(h) {
+  const s = (h >> 15) & 1;
+  const e = (h >> 10) & 0x1f;
+  const m = h & 0x3ff;
+  if (e === 0) return (s ? -1 : 1) * Math.pow(2, -14) * (m / 1024);
+  if (e === 31) return m ? NaN : (s ? -Infinity : Infinity);
+  return (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + m / 1024);
 }
 
 
@@ -129,6 +138,8 @@ async function fetchWeightsBlocking() {
     return null;
   }
 }
+
+const weightData = await fetchWeightsBlocking();
 
 
 // ─── Image processing ──────────────────────────────────────────────────
@@ -305,16 +316,6 @@ async function runVisionEncoder() {
       { resource: a }, { resource: b }, { resource: c }
     ], [Math.ceil(N_/16), Math.ceil(M/16)]);
   };
-
-  // float16 → float32 conversion
-  function f16ToF32(h) {
-    const s = (h >> 15) & 1;
-    const e = (h >> 10) & 0x1f;
-    const m = h & 0x3ff;
-    if (e === 0) return (s ? -1 : 1) * Math.pow(2, -14) * (m / 1024);
-    if (e === 31) return m ? NaN : (s ? -Infinity : Infinity);
-    return (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + m / 1024);
-  }
 
   const startTime = performance.now();
 
@@ -527,7 +528,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // → transpose → flatten → [gt * (gh/MS) * (gw/MS), H*MS*MS]
     // For gt=1: [Nout, 3072]
     // In JS: create new buffer with merged layout
-    const hiddenData = await rt.readBuffer(hidden.buf, N * H * 4);
+    const hiddenData = await rt.readBuffer(hidden, N * H * 4);
     const hiddenF32 = new Float32Array(hiddenData.buffer);
 
     // Perform spatial merge on CPU (simplest for now)
@@ -585,7 +586,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     $('#inferTime').textContent = elapsed.toFixed(0);
     $('#patchInfo').textContent = `${N} patches → ${Nout} features × ${OUT}`;
 
-    const outData = await rt.readBuffer(mergedBuf.buf, Nout * OUT * 4);
+    const outData = await rt.readBuffer(mergedBuf, Nout * OUT * 4);
     const outF32 = new Float32Array(outData.buffer);
 
     // Statistics
